@@ -10,7 +10,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timedelta
 import re
-from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, TIMEZONE
+from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, TIMEZONE, ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +28,29 @@ class TwitterBot:
         self.scheduled_messages = []
         self.last_processed_message_id = None
         self.incremental_schedule_mode = False
+        self.fixed_interval_mode = False  # New mode for task3
         self.quality_selection_timeout = 60
         self._shutdown_flag = False
         self.http_app = None
         self.runner = None
         self.site = None
         self.polling_task = None
+
+    def is_admin(self, user_id):
+        """Check if user is admin"""
+        return user_id in ADMIN_IDS
+
+    async def admin_only(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Check if user is admin and send access denied message if not"""
+        user_id = update.effective_user.id
+        if not self.is_admin(user_id):
+            await update.message.reply_text(
+                "🚫 **Access Denied!**\n\n"
+                "You are not authorized to use this bot.\n"
+                "This bot is restricted to administrators only."
+            )
+            return False
+        return True
 
     async def health_check(self, request):
         """Health check endpoint for Koyeb"""
@@ -158,7 +175,7 @@ class TwitterBot:
             else:
                 formatted_caption = ""
 
-            if self.scheduled_mode or self.incremental_schedule_mode:
+            if self.scheduled_mode or self.incremental_schedule_mode or self.fixed_interval_mode:
                 scheduled_time = self._calculate_schedule_time()
 
                 if event.message.media:
@@ -213,12 +230,19 @@ class TwitterBot:
         now = datetime.now(TIMEZONE)
 
         if self.scheduled_mode:
+            # Original task mode - daily at 7 AM with 1 hour intervals
             scheduled_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
             if scheduled_time < now:
                 scheduled_time += timedelta(days=1)
             scheduled_time += timedelta(hours=self.scheduled_counter)
-        else:
+        elif self.incremental_schedule_mode:
+            # Task2 mode - incremental scheduling
             scheduled_time = now + timedelta(hours=self.scheduled_counter + 2)
+        elif self.fixed_interval_mode:
+            # Task3 mode - fixed 2 hour interval
+            scheduled_time = now + timedelta(hours=2 * (self.scheduled_counter + 1))
+        else:
+            scheduled_time = now
 
         return scheduled_time
 
@@ -247,19 +271,29 @@ class TwitterBot:
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start command handler"""
+        # Admin check
+        if not await self.admin_only(update, context):
+            return
+
         await update.message.reply_text(
             "🤖 Twitter Video Bot Started!\n\n"
             "Send any Twitter/X link to download and forward videos.\n\n"
             "Commands:\n"
             "/task - Schedule posts daily\n"
             "/task2 - Incremental scheduling\n"
+            "/task3 - Fixed 2-hour interval scheduling\n"
             "/endtask - Stop scheduling"
         )
 
     async def start_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start scheduled posting mode"""
+        # Admin check
+        if not await self.admin_only(update, context):
+            return
+
         self.scheduled_mode = True
         self.incremental_schedule_mode = False
+        self.fixed_interval_mode = False
         self.scheduled_counter = 0
         self.scheduled_messages = []
 
@@ -277,8 +311,13 @@ class TwitterBot:
 
     async def start_task2(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start incremental scheduled posting mode"""
+        # Admin check
+        if not await self.admin_only(update, context):
+            return
+
         self.incremental_schedule_mode = True
         self.scheduled_mode = False
+        self.fixed_interval_mode = False
         self.scheduled_counter = 0
         self.scheduled_messages = []
 
@@ -292,10 +331,37 @@ class TwitterBot:
             "Use /endtask to stop scheduled posting."
         )
 
-    async def end_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """End scheduled posting mode"""
+    async def start_task3(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Start fixed 2-hour interval scheduling mode"""
+        # Admin check
+        if not await self.admin_only(update, context):
+            return
+
+        self.fixed_interval_mode = True
         self.scheduled_mode = False
         self.incremental_schedule_mode = False
+        self.scheduled_counter = 0
+        self.scheduled_messages = []
+
+        now = datetime.now(TIMEZONE)
+        first_schedule_time = now + timedelta(hours=2)
+
+        await update.message.reply_text(
+            "🕑 Fixed Interval Mode Activated!\n"
+            f"First video will be scheduled at {first_schedule_time.strftime('%Y-%m-%d %H:%M')} IST\n"
+            "Each new video will be scheduled exactly 2 hours after the previous one.\n"
+            "Use /endtask to stop scheduled posting."
+        )
+
+    async def end_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """End scheduled posting mode"""
+        # Admin check
+        if not await self.admin_only(update, context):
+            return
+
+        self.scheduled_mode = False
+        self.incremental_schedule_mode = False
+        self.fixed_interval_mode = False
 
         await update.message.reply_text(
             "🚫 Scheduled mode deactivated!\n"
@@ -309,6 +375,10 @@ class TwitterBot:
     async def process_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Process Twitter links"""
         try:
+            # Admin check
+            if not await self.admin_only(update, context):
+                return
+
             if not update or not update.message or not update.message.text:
                 await update.message.reply_text("⚠️ Please provide a valid Twitter link.")
                 return
@@ -360,6 +430,7 @@ class TwitterBot:
             self.bot_app.add_handler(CommandHandler("start", self.start_command))
             self.bot_app.add_handler(CommandHandler("task", self.start_task))
             self.bot_app.add_handler(CommandHandler("task2", self.start_task2))
+            self.bot_app.add_handler(CommandHandler("task3", self.start_task3))
             self.bot_app.add_handler(CommandHandler("endtask", self.end_task))
             self.bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_link))
 
