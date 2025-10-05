@@ -35,6 +35,7 @@ class TwitterBot:
         self.runner = None
         self.site = None
         self.polling_task = None
+        self._polling_started = False
 
     def is_admin(self, user_id):
         """Check if user is admin"""
@@ -42,12 +43,43 @@ class TwitterBot:
 
     async def admin_only(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Check if user is admin and send access denied message if not"""
-        user_id = update.effective_user.id
+        try:
+            # Handle both Message and CallbackQuery updates
+            if hasattr(update, 'effective_user'):
+                user_id = update.effective_user.id
+            elif hasattr(update, 'message') and update.message:
+                user_id = update.message.from_user.id
+            elif hasattr(update, 'callback_query') and update.callback_query:
+                user_id = update.callback_query.from_user.id
+            else:
+                user_id = update.from_user.id if hasattr(update, 'from_user') else None
+            
+            if not user_id or not self.is_admin(user_id):
+                if hasattr(update, 'message') and update.message:
+                    await update.message.reply_text(
+                        "🚫 **Access Denied!**\n\n"
+                        "You are not authorized to use this bot.\n"
+                        "This bot is restricted to administrators only."
+                    )
+                elif hasattr(update, 'callback_query') and update.callback_query:
+                    await update.callback_query.message.reply_text(
+                        "🚫 **Access Denied!**\n\n"
+                        "You are not authorized to use this bot.\n"
+                        "This bot is restricted to administrators only."
+                    )
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"Error in admin check: {e}")
+            return False
+
+    async def admin_only_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Admin check specifically for callback queries"""
+        user_id = update.callback_query.from_user.id
         if not self.is_admin(user_id):
-            await update.message.reply_text(
-                "🚫 **Access Denied!**\n\n"
-                "You are not authorized to use this bot.\n"
-                "This bot is restricted to administrators only."
+            await update.callback_query.answer(
+                "🚫 Access Denied! You are not authorized to use this bot.",
+                show_alert=True
             )
             return False
         return True
@@ -310,25 +342,56 @@ class TwitterBot:
         query = update.callback_query
         await query.answer()
 
-        if not self.is_admin(query.from_user.id):
-            await query.edit_message_text(
-                "🚫 **Access Denied!**\n\n"
-                "You are not authorized to use this bot."
-            )
+        # Admin check for callback
+        if not await self.admin_only_callback(update, context):
             return
 
-        if query.data == "task_1hour":
-            await self.start_task(query, context)
-        elif query.data == "task2_nowsend":
-            await self.start_task2(query, context)
-        elif query.data == "task3_2hour":
-            await self.start_task3(query, context)
+        try:
+            if query.data == "task_1hour":
+                await self.start_task_callback(query, context)
+            elif query.data == "task2_nowsend":
+                await self.start_task2_callback(query, context)
+            elif query.data == "task3_2hour":
+                await self.start_task3_callback(query, context)
+        except Exception as e:
+            logger.error(f"Error in button handler: {e}")
+            await query.edit_message_text("❌ Error processing your request. Please try again.")
 
     async def start_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start scheduled posting mode"""
-        if hasattr(update, 'message') and not await self.admin_only(update, context):
+        if not await self.admin_only(update, context):
             return
 
+        await self._start_task_common(update, context)
+
+    async def start_task_callback(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Start scheduled posting mode from callback"""
+        await self._start_task_common(query, context, is_callback=True)
+
+    async def start_task2(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Start incremental scheduled posting mode"""
+        if not await self.admin_only(update, context):
+            return
+
+        await self._start_task2_common(update, context)
+
+    async def start_task2_callback(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Start incremental scheduled posting mode from callback"""
+        await self._start_task2_common(query, context, is_callback=True)
+
+    async def start_task3(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Start fixed 2-hour interval scheduling mode starting from 7 AM"""
+        if not await self.admin_only(update, context):
+            return
+
+        await self._start_task3_common(update, context)
+
+    async def start_task3_callback(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Start fixed 2-hour interval scheduling mode from callback"""
+        await self._start_task3_common(query, context, is_callback=True)
+
+    async def _start_task_common(self, update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+        """Common function for starting task mode"""
         self.scheduled_mode = True
         self.incremental_schedule_mode = False
         self.fixed_interval_mode = False
@@ -347,16 +410,13 @@ class TwitterBot:
             "❌ Use /endtask to stop scheduled posting."
         )
 
-        if hasattr(update, 'message'):
-            await update.message.reply_text(response_text)
-        else:
+        if is_callback:
             await update.edit_message_text(response_text)
+        else:
+            await update.message.reply_text(response_text)
 
-    async def start_task2(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start incremental scheduled posting mode"""
-        if hasattr(update, 'message') and not await self.admin_only(update, context):
-            return
-
+    async def _start_task2_common(self, update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+        """Common function for starting task2 mode"""
         self.incremental_schedule_mode = True
         self.scheduled_mode = False
         self.fixed_interval_mode = False
@@ -373,16 +433,13 @@ class TwitterBot:
             "❌ Use /endtask to stop scheduled posting."
         )
 
-        if hasattr(update, 'message'):
-            await update.message.reply_text(response_text)
-        else:
+        if is_callback:
             await update.edit_message_text(response_text)
+        else:
+            await update.message.reply_text(response_text)
 
-    async def start_task3(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start fixed 2-hour interval scheduling mode starting from 7 AM"""
-        if hasattr(update, 'message') and not await self.admin_only(update, context):
-            return
-
+    async def _start_task3_common(self, update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+        """Common function for starting task3 mode"""
         self.fixed_interval_mode = True
         self.scheduled_mode = False
         self.incremental_schedule_mode = False
@@ -408,10 +465,10 @@ class TwitterBot:
             "❌ Use /endtask to stop scheduled posting."
         )
 
-        if hasattr(update, 'message'):
-            await update.message.reply_text(response_text)
-        else:
+        if is_callback:
             await update.edit_message_text(response_text)
+        else:
+            await update.message.reply_text(response_text)
 
     async def end_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """End scheduled posting mode"""
@@ -491,6 +548,10 @@ class TwitterBot:
     async def start_polling(self):
         """Start bot polling in a separate task"""
         try:
+            if self._polling_started:
+                logger.warning("Polling already started, skipping...")
+                return
+                
             logger.info("Starting Telegram Bot...")
             self.bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -505,21 +566,30 @@ class TwitterBot:
 
             logger.info("Bot started successfully! Waiting for messages...")
             
+            # Stop any existing webhook first
+            await self.bot_app.bot.delete_webhook(drop_pending_updates=True)
+            await asyncio.sleep(2)
+            
             await self.bot_app.initialize()
             await self.bot_app.start()
             await self.bot_app.updater.start_polling()
             
+            self._polling_started = True
+            
+            # Keep the polling running
             while not self._shutdown_flag:
                 await asyncio.sleep(1)
                 
         except Exception as e:
             logger.error(f"Error in polling: {e}")
+            self._polling_started = False
             raise
         finally:
             if self.bot_app:
                 await self.bot_app.updater.stop()
                 await self.bot_app.stop()
                 await self.bot_app.shutdown()
+                self._polling_started = False
 
     async def shutdown(self):
         """Shutdown all services properly"""
@@ -601,3 +671,7 @@ class TwitterBot:
                     except Exception as e:
                         logger.error(f"Error in final shutdown: {e}")
                     self.loop.close()
+
+if __name__ == "__main__":
+    bot = TwitterBot()
+    bot.run()
