@@ -8,6 +8,7 @@ from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import ReplyKeyboardMarkup, KeyboardButton
 from datetime import datetime, timedelta
 import re
 from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, TIMEZONE, ADMIN_IDS
@@ -35,6 +36,15 @@ class TwitterBot:
         self.runner = None
         self.site = None
         self.polling_task = None
+
+    def create_main_keyboard(self):
+        """Create main keyboard with all commands as buttons"""
+        keyboard = [
+            [KeyboardButton("/start"), KeyboardButton("/task")],
+            [KeyboardButton("/task2"), KeyboardButton("/task3")],
+            [KeyboardButton("/endtask")]
+        ]
+        return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, input_field_placeholder="Choose a command...")
 
     def is_admin(self, user_id):
         """Check if user is admin"""
@@ -136,7 +146,8 @@ class TwitterBot:
                                         logger.info(f"Selected quality: {quality}")
                                         if self.current_update and self.current_update.message:
                                             await self.current_update.message.reply_text(
-                                                f"✅ Video is being downloaded in {quality} quality..."
+                                                f"✅ Video is being downloaded in {quality} quality...",
+                                                reply_markup=self.create_main_keyboard()
                                             )
                                         self.quality_selected = True
                                         return
@@ -147,7 +158,8 @@ class TwitterBot:
                                 logger.info(f"Selected first available quality: {quality}")
                                 if self.current_update and self.current_update.message:
                                     await self.current_update.message.reply_text(
-                                        f"✅ Video is being downloaded in {quality} quality..."
+                                        f"✅ Video is being downloaded in {quality} quality...",
+                                        reply_markup=self.create_main_keyboard()
                                     )
                                 self.quality_selected = True
                                 return
@@ -197,7 +209,8 @@ class TwitterBot:
 
                 if self.current_update and self.current_update.message:
                     await self.current_update.message.reply_text(
-                        f"✅ Video successfully scheduled for {scheduled_time.strftime('%Y-%m-%d %H:%M')} IST!"
+                        f"✅ Video successfully scheduled for {scheduled_time.strftime('%Y-%m-%d %H:%M')} IST!",
+                        reply_markup=self.create_main_keyboard()
                     )
             else:
                 if event.message.media:
@@ -213,7 +226,10 @@ class TwitterBot:
                     )
 
                 if self.current_update and self.current_update.message:
-                    await self.current_update.message.reply_text("✅ Video successfully sent to your channel!")
+                    await self.current_update.message.reply_text(
+                        "✅ Video successfully sent to your channel!",
+                        reply_markup=self.create_main_keyboard()
+                    )
 
             logger.info(f"Message sent to channel {YOUR_CHANNEL_ID}")
             self._reset_flags()
@@ -222,7 +238,10 @@ class TwitterBot:
             error_msg = f"❌ Error sending video to channel: {str(e)}"
             logger.error(error_msg)
             if self.current_update and self.current_update.message:
-                await self.current_update.message.reply_text(error_msg)
+                await self.current_update.message.reply_text(
+                    error_msg,
+                    reply_markup=self.create_main_keyboard()
+                )
             self._reset_flags()
 
     def _calculate_schedule_time(self):
@@ -239,8 +258,13 @@ class TwitterBot:
             # Task2 mode - incremental scheduling
             scheduled_time = now + timedelta(hours=self.scheduled_counter + 2)
         elif self.fixed_interval_mode:
-            # Task3 mode - fixed 2 hour interval
-            scheduled_time = now + timedelta(hours=2 * (self.scheduled_counter + 1))
+            # Task3 mode - fixed 2 hour interval starting from 7 AM
+            # Calculate next 7 AM
+            scheduled_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
+            if scheduled_time < now:
+                scheduled_time += timedelta(days=1)
+            # Add 2 hours for each subsequent post
+            scheduled_time += timedelta(hours=2 * self.scheduled_counter)
         else:
             scheduled_time = now
 
@@ -276,13 +300,15 @@ class TwitterBot:
             return
 
         await update.message.reply_text(
-            "🤖 Twitter Video Bot Started!\n\n"
-            "Send any Twitter/X link to download and forward videos.\n\n"
-            "Commands:\n"
-            "/task - Schedule posts daily\n"
-            "/task2 - Incremental scheduling\n"
-            "/task3 - Fixed 2-hour interval scheduling\n"
-            "/endtask - Stop scheduling"
+            "🤖 **Twitter Video Bot Started!**\n\n"
+            "📤 **Send any Twitter/X link to download and forward videos.**\n\n"
+            "📋 **Available Commands:**\n"
+            "• /task - Schedule posts daily at 7 AM with 1-hour intervals\n"
+            "• /task2 - Incremental scheduling (2h, 3h, 4h...)\n"
+            "• /task3 - Fixed 2-hour intervals starting from 7 AM\n"
+            "• /endtask - Stop scheduling and post immediately\n\n"
+            "🎯 **Use the buttons below or type commands:**",
+            reply_markup=self.create_main_keyboard()
         )
 
     async def start_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -303,10 +329,11 @@ class TwitterBot:
             first_schedule_time += timedelta(days=1)
 
         await update.message.reply_text(
-            "📅 Scheduled mode activated!\n"
-            f"First video will be scheduled at {first_schedule_time.strftime('%Y-%m-%d %H:%M')} IST\n"
-            "Each new video will be scheduled 1 hour after the previous one.\n"
-            "Use /endtask to stop scheduled posting."
+            "📅 **Scheduled Mode Activated!**\n\n"
+            f"⏰ First video: {first_schedule_time.strftime('%Y-%m-%d %H:%M')} IST\n"
+            f"🕐 Each new video: +1 hour interval\n\n"
+            "❌ Use /endtask to stop scheduled posting.",
+            reply_markup=self.create_main_keyboard()
         )
 
     async def start_task2(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -325,14 +352,15 @@ class TwitterBot:
         first_schedule_time = now + timedelta(hours=2)
 
         await update.message.reply_text(
-            "⏱️ Incremental Scheduled mode activated!\n"
-            f"First video will be scheduled at {first_schedule_time.strftime('%Y-%m-%d %H:%M')} IST\n"
-            "Next video will be scheduled 2 hours after, then 3 hours, and so on.\n"
-            "Use /endtask to stop scheduled posting."
+            "⏱️ **Incremental Scheduled Mode Activated!**\n\n"
+            f"⏰ First video: {first_schedule_time.strftime('%Y-%m-%d %H:%M')} IST\n"
+            f"🕐 Next intervals: +2h, +3h, +4h...\n\n"
+            "❌ Use /endtask to stop scheduled posting.",
+            reply_markup=self.create_main_keyboard()
         )
 
     async def start_task3(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start fixed 2-hour interval scheduling mode"""
+        """Start fixed 2-hour interval scheduling mode starting from 7 AM"""
         # Admin check
         if not await self.admin_only(update, context):
             return
@@ -343,14 +371,25 @@ class TwitterBot:
         self.scheduled_counter = 0
         self.scheduled_messages = []
 
+        # Calculate schedule times
         now = datetime.now(TIMEZONE)
-        first_schedule_time = now + timedelta(hours=2)
+        first_schedule_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
+        if first_schedule_time < now:
+            first_schedule_time += timedelta(days=1)
+
+        second_schedule_time = first_schedule_time + timedelta(hours=2)
+        third_schedule_time = first_schedule_time + timedelta(hours=4)
 
         await update.message.reply_text(
-            "🕑 Fixed Interval Mode Activated!\n"
-            f"First video will be scheduled at {first_schedule_time.strftime('%Y-%m-%d %H:%M')} IST\n"
-            "Each new video will be scheduled exactly 2 hours after the previous one.\n"
-            "Use /endtask to stop scheduled posting."
+            "🕑 **Fixed Interval Mode Activated!**\n\n"
+            f"⏰ Schedule starts at: 7:00 AM IST\n"
+            f"🕐 Fixed interval: Every 2 hours\n\n"
+            f"📅 Example schedule:\n"
+            f"• 1st post: {first_schedule_time.strftime('%H:%M')} IST\n"
+            f"• 2nd post: {second_schedule_time.strftime('%H:%M')} IST\n"
+            f"• 3rd post: {third_schedule_time.strftime('%H:%M')} IST\n\n"
+            "❌ Use /endtask to stop scheduled posting.",
+            reply_markup=self.create_main_keyboard()
         )
 
     async def end_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -364,9 +403,11 @@ class TwitterBot:
         self.fixed_interval_mode = False
 
         await update.message.reply_text(
-            "🚫 Scheduled mode deactivated!\n"
-            "Videos will now be posted immediately.\n"
-            f"Total {self.scheduled_counter} videos were scheduled."
+            "🚫 **Scheduled Mode Deactivated!**\n\n"
+            "✅ Videos will now be posted immediately.\n"
+            f"📊 Total {self.scheduled_counter} videos were scheduled.\n\n"
+            "🎯 Use the buttons below to start scheduling again:",
+            reply_markup=self.create_main_keyboard()
         )
 
         self.scheduled_counter = 0
@@ -380,14 +421,20 @@ class TwitterBot:
                 return
 
             if not update or not update.message or not update.message.text:
-                await update.message.reply_text("⚠️ Please provide a valid Twitter link.")
+                await update.message.reply_text(
+                    "⚠️ Please provide a valid Twitter link.",
+                    reply_markup=self.create_main_keyboard()
+                )
                 return
 
             message = update.message
             text = message.text.strip()
 
             if not any(domain in text for domain in ['twitter.com', 'x.com']):
-                await message.reply_text("⚠️ Please provide a valid Twitter/X link.")
+                await message.reply_text(
+                    "⚠️ Please provide a valid Twitter/X link.",
+                    reply_markup=self.create_main_keyboard()
+                )
                 return
 
             text = self.clean_text(text)
@@ -397,7 +444,10 @@ class TwitterBot:
             self.quality_selected = False
             self.video_received = False
 
-            await message.reply_text("⏳ Processing link and downloading video...")
+            await message.reply_text(
+                "⏳ Processing link and downloading video...",
+                reply_markup=self.create_main_keyboard()
+            )
 
             await self.userbot.send_message(TWITTER_VID_BOT, text)
             logger.info(f"Link sent to twittervid_bot: {text}")
@@ -409,14 +459,20 @@ class TwitterBot:
                 await asyncio.sleep(2)
 
             if not self.quality_selected and not self.video_received:
-                await message.reply_text("⚠️ Timeout waiting for video processing. Please try again.")
+                await message.reply_text(
+                    "⚠️ Timeout waiting for video processing. Please try again.",
+                    reply_markup=self.create_main_keyboard()
+                )
                 self._reset_flags()
 
         except Exception as e:
             error_msg = f"❌ Error processing link: {str(e)}"
             logger.error(error_msg)
             if update and update.message:
-                await update.message.reply_text(error_msg)
+                await update.message.reply_text(
+                    error_msg,
+                    reply_markup=self.create_main_keyboard()
+                )
             self._reset_flags()
 
     async def start_polling(self):
