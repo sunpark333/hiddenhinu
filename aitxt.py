@@ -43,10 +43,8 @@ class AICaptionEnhancer:
         Make this Twitter caption more engaging and viral: "{original_text}"
         
         Rules:
-        - Keep it short (1-2 lines)
         - Make it attention-grabbing  
         - Use 1-2 emojis if relevant
-        - Add 1-2 hashtags
         - Keep original meaning
         - Make it sound like breaking news
         - Return only the enhanced caption
