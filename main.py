@@ -3,6 +3,7 @@ import asyncio
 import pytz
 import os
 import sys
+from aiohttp import web
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telegram import Update
@@ -16,7 +17,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout)  # Koyeb logs को capture करने के लिए
+        logging.StreamHandler(sys.stdout)
     ]
 )
 
@@ -38,13 +39,36 @@ class TwitterBot:
         self.incremental_schedule_mode = False
         self.quality_selection_timeout = 60
         self._shutdown_flag = False
+        self.http_app = None
+        self.runner = None
+        self.site = None
+
+    async def health_check(self, request):
+        """Health check endpoint for Koyeb"""
+        return web.Response(text="Bot is running!")
+
+    async def start_http_server(self):
+        """Start HTTP server for health checks"""
+        self.http_app = web.Application()
+        self.http_app.router.add_get('/', self.health_check)
+        self.http_app.router.add_get('/health', self.health_check)
+        
+        runner = web.AppRunner(self.http_app)
+        await runner.setup()
+        
+        # Koyeb के लिए PORT environment variable use करें
+        port = int(os.environ.get('PORT', 8000))
+        site = web.TCPSite(runner, '0.0.0.0', port)
+        await site.start()
+        
+        logger.info(f"HTTP server started on port {port}")
+        return runner, site
 
     async def initialize_userbot(self):
         """Initialize Telegram userbot with string session"""
         try:
             logger.info("Starting UserBot initialization...")
             
-            # String session directly use करें
             session = StringSession(TELEGRAM_SESSION_STRING)
             self.userbot = TelegramClient(
                 session=session,
@@ -90,13 +114,11 @@ class TwitterBot:
                 message_text = event.message.text or ""
                 logger.info(f"Received message from twittervid_bot: {message_text[:100]}...")
 
-                # Handle quality selection
                 if "Select Video Quality" in message_text and not self.quality_selected:
                     logger.info("Quality selection detected")
                     try:
                         buttons = await event.message.get_buttons()
                         if buttons:
-                            # All available buttons try करें
                             for row in buttons:
                                 for button in row:
                                     if any(q in button.text for q in ['720', 'HD', 'High', '1080']):
@@ -110,7 +132,6 @@ class TwitterBot:
                                         self.quality_selected = True
                                         return
 
-                            # If no HD quality found, first button click करें
                             if buttons[0]:
                                 await buttons[0][0].click()
                                 quality = buttons[0][0].text
@@ -126,7 +147,6 @@ class TwitterBot:
                         logger.error(f"Error in quality selection: {str(e)}")
                         self.quality_selected = True
 
-                # Handle received video/media
                 has_media = bool(event.message.media)
                 is_final_message = any(word in message_text for word in ['Download', 'Ready', 'Here', 'Quality'])
 
@@ -320,7 +340,6 @@ class TwitterBot:
             await self.userbot.send_message(TWITTER_VID_BOT, text)
             logger.info(f"Link sent to twittervid_bot: {text}")
 
-            # Wait for quality selection response with timeout
             start_time = datetime.now()
             while (datetime.now() - start_time).seconds < self.quality_selection_timeout:
                 if self.quality_selected or self.video_received:
@@ -353,10 +372,45 @@ class TwitterBot:
                 logger.info("Disconnecting userbot...")
                 await self.userbot.disconnect()
                 
+            if self.runner:
+                logger.info("Stopping HTTP server...")
+                await self.runner.cleanup()
+                
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
         
         logger.info("All services safely shut down")
+
+    async def run_async(self):
+        """Async main function"""
+        try:
+            # HTTP server start करें
+            logger.info("Starting HTTP server for health checks...")
+            self.runner, self.site = await self.start_http_server()
+            
+            # UserBot initialize करें
+            logger.info("Initializing UserBot...")
+            await self.initialize_userbot()
+            
+            # Bot application start करें
+            logger.info("Starting Telegram Bot...")
+            self.bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+            # Add handlers
+            self.bot_app.add_handler(CommandHandler("start", self.start_command))
+            self.bot_app.add_handler(CommandHandler("task", self.start_task))
+            self.bot_app.add_handler(CommandHandler("task2", self.start_task2))
+            self.bot_app.add_handler(CommandHandler("endtask", self.end_task))
+            self.bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_link))
+
+            logger.info("Bot started successfully! Waiting for messages...")
+            
+            # Bot polling start करें
+            await self.bot_app.run_polling()
+            
+        except Exception as e:
+            logger.error(f"Error in run_async: {e}")
+            raise
 
     def run(self):
         """Main function to run the bot"""
@@ -365,33 +419,11 @@ class TwitterBot:
         
         while retry_count < max_retries and not self._shutdown_flag:
             try:
-                # Koyeb के लिए explicit event loop management
                 self.loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(self.loop)
                 
-                logger.info(f"Initializing UserBot... (Attempt {retry_count + 1})")
-                
-                # Initialize userbot first
-                self.loop.run_until_complete(self.initialize_userbot())
-                
-                # Initialize bot application
-                logger.info("Starting Telegram Bot...")
-                self.bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-                # Add handlers
-                self.bot_app.add_handler(CommandHandler("start", self.start_command))
-                self.bot_app.add_handler(CommandHandler("task", self.start_task))
-                self.bot_app.add_handler(CommandHandler("task2", self.start_task2))
-                self.bot_app.add_handler(CommandHandler("endtask", self.end_task))
-                self.bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_link))
-
-                logger.info("Bot started successfully! Waiting for messages...")
-                
-                # Koyeb के लिए polling start करें
-                self.bot_app.run_polling(
-                    close_loop=False,
-                    stop_signals=[]
-                )
+                logger.info(f"Starting bot... (Attempt {retry_count + 1})")
+                self.loop.run_until_complete(self.run_async())
                 
             except KeyboardInterrupt:
                 logger.info("Received keyboard interrupt, shutting down...")
@@ -412,6 +444,10 @@ class TwitterBot:
                 else:
                     logger.error("Maximum retries reached. Exiting...")
                     break
+            finally:
+                if self.loop and not self.loop.is_closed():
+                    self.loop.run_until_complete(self.shutdown())
+                    self.loop.close()
 
 if __name__ == '__main__':
     logger.info("Starting Twitter Bot on Koyeb...")
