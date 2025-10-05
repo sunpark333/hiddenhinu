@@ -27,9 +27,7 @@ class AICaptionEnhancer:
             enhanced_text = await self._call_perplexity_api(prompt)
             
             if enhanced_text and len(enhanced_text.strip()) > 20:
-                # Trim to Telegram limit (1024 characters)
-                trimmed_text = self._trim_to_telegram_limit(enhanced_text.strip())
-                return trimmed_text
+                return enhanced_text.strip()
             else:
                 return original_text
                 
@@ -39,29 +37,18 @@ class AICaptionEnhancer:
 
     def _create_enhancement_prompt(self, original_text, twitter_link=None):
         """
-        Create prompt for AI enhancement with shorter content
+        Create prompt for AI enhancement
         """
         prompt = f"""
-        Original text: "{original_text}"
-
-        Create a SHORT and ENGAGING social media post for Telegram:
-
-        REQUIREMENTS:
-        - MAX 3-4 lines total (including both English and Hindi)
-        - English: 1-2 short lines only
-        - Hindi: 1 short line only  
-        - Total character count MUST be under 900 characters
-        - Use simple, concise language
-        - Add 1-2 emojis max
-        - Hindi should be brief and different from English
-        - Sound natural and human-written
-
-        FORMAT:
-        [1-2 short English lines]
-
-        🌐 [One very short Hindi line]
-
-        Keep it VERY SHORT and impactful!
+        Make this Twitter caption more engaging and viral: "{original_text}"
+        
+        Rules:
+        - Make it attention-grabbing  
+        - Use 1-2 emojis if relevant
+        - Keep original meaning
+        - Make it sound like breaking news
+        - Return only the enhanced caption
+        - look likes human made not ai genrated
         """
         
         return prompt
@@ -76,18 +63,18 @@ class AICaptionEnhancer:
         }
         
         payload = {
-            "model": "sonar",
+            "model": "sonar",  # Using the working model from group.py
             "messages": [
                 {
                     "role": "system", 
-                    "content": "You create very short, concise social media posts that are under 900 characters. You write in a natural, human-like tone. Keep English content to 1-2 lines and Hindi to just 1 line. Always stay within character limits."
+                    "content": "You are a social media expert who enhances captions to make them more engaging and viral. Always return only the enhanced caption without any explanations."
                 },
                 {
                     "role": "user",
                     "content": prompt
                 }
             ],
-            "max_tokens": 150,  # Reduced tokens for shorter output
+            "max_tokens": 100,
             "temperature": 0.7
         }
         
@@ -116,7 +103,7 @@ class AICaptionEnhancer:
 
     def _clean_ai_response(self, text):
         """
-        Clean AI response and ensure short length
+        Clean AI response from unwanted formatting
         """
         if not text:
             return text
@@ -126,51 +113,24 @@ class AICaptionEnhancer:
         
         # Remove common AI prefixes
         prefixes_to_remove = [
-            "Here's the short post:",
-            "Short post:",
-            "Social media post:",
-            "Here is the post:",
-            "Created post:",
-            "Post content:",
-            "Here's the concise post:"
+            "Enhanced caption:",
+            "Here's the enhanced caption:",
+            "Caption:",
+            "Enhanced:",
+            "News-style caption:",
+            "Here is the enhanced caption:",
+            "Viral caption:"
         ]
         
         for prefix in prefixes_to_remove:
             if text.lower().startswith(prefix.lower()):
                 text = text[len(prefix):].strip()
                 
-        # Remove markdown formatting
-        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-        text = re.sub(r'\*(.*?)\*', r'\1', text)
-        
-        # Ensure proper spacing but keep it compact
-        text = re.sub(r'\n\s*\n', '\n', text)
+        # Remove any markdown formatting
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # Remove bold
+        text = re.sub(r'\*(.*?)\*', r'\1', text)      # Remove italic
         
         return text.strip()
-
-    def _trim_to_telegram_limit(self, text):
-        """
-        Trim text to Telegram's caption limit (1024 characters)
-        """
-        TELEGRAM_MAX_LENGTH = 1024
-        
-        if len(text) <= TELEGRAM_MAX_LENGTH:
-            return text
-            
-        # Trim to maximum length
-        trimmed = text[:TELEGRAM_MAX_LENGTH - 3] + "..."
-        
-        # Try to trim at sentence end if possible
-        last_period = trimmed.rfind('.')
-        last_newline = trimmed.rfind('\n')
-        
-        if last_period > TELEGRAM_MAX_LENGTH * 0.7:  # If we have a period in last 30%
-            trimmed = trimmed[:last_period + 1]
-        elif last_newline > TELEGRAM_MAX_LENGTH * 0.7:
-            trimmed = trimmed[:last_newline]
-            
-        logger.warning(f"Caption trimmed from {len(text)} to {len(trimmed)} characters")
-        return trimmed
 
     def is_meaningful_text(self, text):
         """
