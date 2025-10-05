@@ -37,23 +37,43 @@ class AICaptionEnhancer:
 
     def _create_enhancement_prompt(self, original_text, twitter_link=None):
         """
-        Create prompt for AI enhancement with longer text and Hindi translation
+        Create prompt for AI enhancement with separate paragraphs and natural Hindi
         """
         prompt = f"""
-        Enhance this Twitter caption to make it more engaging and viral: "{original_text}"
-        
-        Requirements:
-        - Make it longer and more detailed (2-3 sentences)
-        - Keep original meaning but expand with relevant context
-        - Make it attention-grabbing and news-style
-        - Use 2-3 relevant emojis
-        - Add a Hindi translation at the end with "हिंदी अनुवाद:" prefix
-        - Return format: English enhanced caption followed by Hindi translation
-        
-        Example format:
-        Breaking news! [expanded context]. This development could [impact/importance]. 🚀📢
+        Original text: "{original_text}"
 
-        हिंदी अनुवाद: [Hindi translation here]
+        Create an engaging social media post with these requirements:
+
+        ENGLISH SECTION (2-3 separate paragraphs):
+        - First paragraph: Main news/announcement (attention-grabbing)
+        - Second paragraph: Additional context/details
+        - Third paragraph: Impact/importance (optional)
+        - Use natural, human-like language (not AI-generated)
+        - Add 2-3 relevant emojis naturally
+        - Each paragraph should be separate
+
+        HINDI SECTION (completely different approach):
+        - Don't do direct translation from English
+        - Create separate Hindi content with different phrasing
+        - Use natural Hindi conversational style
+        - Focus on emotional appeal and local context
+        - Add 1-2 Hindi-appropriate emojis
+        - Make it sound like human-written, not translated
+
+        FORMAT:
+        [English Paragraph 1]
+
+        [English Paragraph 2]
+
+        [English Paragraph 3]
+
+        🌐 हिंदी संस्करण:
+        [Completely different Hindi content with unique perspective]
+
+        Important: 
+        - Avoid AI-generated sounding language
+        - Use casual, natural tone in both languages
+        - Hindi content should stand on its own, not be a translation
         """
         
         return prompt
@@ -68,19 +88,19 @@ class AICaptionEnhancer:
         }
         
         payload = {
-            "model": "sonar",  # Using the working model from group.py
+            "model": "sonar",
             "messages": [
                 {
                     "role": "system", 
-                    "content": "You are a social media expert who enhances captions to make them more engaging and viral. You create longer, detailed captions and provide Hindi translations. Always return both English and Hindi versions in the specified format."
+                    "content": "You are a bilingual social media manager who creates engaging posts in both English and Hindi. You write in natural, human-like language that doesn't sound AI-generated. You create separate, unique content for Hindi that is not a direct translation but has its own perspective and emotional appeal."
                 },
                 {
                     "role": "user",
                     "content": prompt
                 }
             ],
-            "max_tokens": 200,  # Increased tokens for longer text
-            "temperature": 0.7
+            "max_tokens": 350,  # Increased for longer content
+            "temperature": 0.8  # Slightly higher for more creativity
         }
         
         try:
@@ -90,7 +110,7 @@ class AICaptionEnhancer:
                         data = await response.json()
                         content = data['choices'][0]['message']['content'].strip()
                         
-                        # Clean the response
+                        # Clean the response but preserve paragraph structure
                         content = self._clean_ai_response(content)
                         return content
                         
@@ -108,7 +128,7 @@ class AICaptionEnhancer:
 
     def _clean_ai_response(self, text):
         """
-        Clean AI response from unwanted formatting
+        Clean AI response but preserve paragraph structure and natural flow
         """
         if not text:
             return text
@@ -116,24 +136,26 @@ class AICaptionEnhancer:
         # Remove quotes if present
         text = text.strip('"\'')
         
-        # Remove common AI prefixes but keep the structure
+        # Remove common AI prefixes but keep the content structure
         prefixes_to_remove = [
-            "Enhanced caption:",
-            "Here's the enhanced caption:",
-            "Caption:",
-            "Enhanced:",
-            "News-style caption:",
-            "Here is the enhanced caption:",
-            "Viral caption:"
+            "Here's the enhanced post:",
+            "Enhanced post:",
+            "Social media post:",
+            "Here is the post:",
+            "Created post:",
+            "Post content:"
         ]
         
         for prefix in prefixes_to_remove:
             if text.lower().startswith(prefix.lower()):
                 text = text[len(prefix):].strip()
                 
-        # Remove any markdown formatting but keep emojis and Hindi text
+        # Remove markdown formatting but preserve paragraphs
         text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # Remove bold
         text = re.sub(r'\*(.*?)\*', r'\1', text)      # Remove italic
+        
+        # Ensure proper paragraph spacing
+        text = re.sub(r'\n\s*\n', '\n\n', text)
         
         return text.strip()
 
