@@ -2,6 +2,7 @@ import logging
 import asyncio
 import pytz
 import os
+import sys
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telegram import Update
@@ -10,13 +11,13 @@ from datetime import datetime, timedelta
 import re
 from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, TIMEZONE
 
-# Set timezone
-TIMEZONE = pytz.timezone(TIMEZONE)
-
-# Logging setup
+# Koyeb के लिए logging setup
 logging.basicConfig(
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    handlers=[
+        logging.StreamHandler(sys.stdout)  # Koyeb logs को capture करने के लिए
+    ]
 )
 
 logger = logging.getLogger(__name__)
@@ -39,9 +40,11 @@ class TwitterBot:
         self._shutdown_flag = False
 
     async def initialize_userbot(self):
-        """Initialize Telegram userbot with string session in memory"""
+        """Initialize Telegram userbot with string session"""
         try:
-            # String session directly use करें - no file system
+            logger.info("Starting UserBot initialization...")
+            
+            # String session directly use करें
             session = StringSession(TELEGRAM_SESSION_STRING)
             self.userbot = TelegramClient(
                 session=session,
@@ -50,7 +53,7 @@ class TwitterBot:
             )
 
             await self.userbot.start()
-            logger.info("UserBot successfully started with string session")
+            logger.info("UserBot successfully started")
 
             # Event handler for twittervid_bot
             @self.userbot.on(events.NewMessage(from_users=TWITTER_VID_BOT))
@@ -59,11 +62,10 @@ class TwitterBot:
 
             # Test connection
             me = await self.userbot.get_me()
-            logger.info(f"Bot started as: {me.username} (ID: {me.id})")
+            logger.info(f"UserBot started as: {me.username} (ID: {me.id})")
 
             # Channel access test
             try:
-                # Just get channel info, don't send message
                 channel = await self.userbot.get_entity(YOUR_CHANNEL_ID)
                 logger.info(f"Verified access to channel: {channel.title}")
             except Exception as e:
@@ -83,7 +85,7 @@ class TwitterBot:
             self.last_processed_message_id = event.message.id
 
             if self.waiting_for_video and self.current_update:
-                await asyncio.sleep(3)  # Increased delay for stability
+                await asyncio.sleep(3)
                 
                 message_text = event.message.text or ""
                 logger.info(f"Received message from twittervid_bot: {message_text[:100]}...")
@@ -122,10 +124,9 @@ class TwitterBot:
 
                     except Exception as e:
                         logger.error(f"Error in quality selection: {str(e)}")
-                        # Continue without quality selection
                         self.quality_selected = True
 
-                # Handle received video/media (check if we have media OR if it's the final message)
+                # Handle received video/media
                 has_media = bool(event.message.media)
                 is_final_message = any(word in message_text for word in ['Download', 'Ready', 'Here', 'Quality'])
 
@@ -140,7 +141,6 @@ class TwitterBot:
         try:
             caption = self.clean_text(event.message.text) if event.message.text else ""
 
-            # Simple caption formatting
             if caption:
                 formatted_caption = f"\n\n{caption}\n\n"
             else:
@@ -178,7 +178,6 @@ class TwitterBot:
                         caption=formatted_caption
                     )
                 else:
-                    # If no media, just send the caption
                     await self.userbot.send_message(
                         YOUR_CHANNEL_ID,
                         formatted_caption or "📹 Video Content"
@@ -228,15 +227,22 @@ class TwitterBot:
             lines = lines[:-3]
 
         cleaned_text = '\n'.join(lines)
-
-        # Remove hidden links if any
         hidden_link_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
         cleaned_text = re.sub(hidden_link_pattern, r'\1', cleaned_text)
-
-        # Remove banned text pattern
         cleaned_text = cleaned_text.replace('📲 @twittervid_bot', '').strip()
 
         return cleaned_text
+
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Start command handler"""
+        await update.message.reply_text(
+            "🤖 Twitter Video Bot Started!\n\n"
+            "Send any Twitter/X link to download and forward videos.\n\n"
+            "Commands:\n"
+            "/task - Schedule posts daily\n"
+            "/task2 - Incremental scheduling\n"
+            "/endtask - Stop scheduling"
+        )
 
     async def start_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start scheduled posting mode"""
@@ -298,12 +304,10 @@ class TwitterBot:
             message = update.message
             text = message.text.strip()
 
-            # Basic Twitter URL validation
             if not any(domain in text for domain in ['twitter.com', 'x.com']):
                 await message.reply_text("⚠️ Please provide a valid Twitter/X link.")
                 return
 
-            # Clean the text
             text = self.clean_text(text)
 
             self.current_update = update
@@ -313,7 +317,6 @@ class TwitterBot:
 
             await message.reply_text("⏳ Processing link and downloading video...")
 
-            # Send the link to twittervid_bot
             await self.userbot.send_message(TWITTER_VID_BOT, text)
             logger.info(f"Link sent to twittervid_bot: {text}")
 
@@ -334,17 +337,6 @@ class TwitterBot:
             if update and update.message:
                 await update.message.reply_text(error_msg)
             self._reset_flags()
-
-    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start command handler"""
-        await update.message.reply_text(
-            "🤖 Twitter Video Bot Started!\n\n"
-            "Send any Twitter/X link to download and forward videos.\n\n"
-            "Commands:\n"
-            "/task - Schedule posts daily\n"
-            "/task2 - Incremental scheduling\n"
-            "/endtask - Stop scheduling"
-        )
 
     async def shutdown(self):
         """Shutdown all services properly"""
@@ -367,22 +359,19 @@ class TwitterBot:
         logger.info("All services safely shut down")
 
     def run(self):
-        """Main function to run the bot with proper event loop management"""
+        """Main function to run the bot"""
         retry_count = 0
         max_retries = 3
         
         while retry_count < max_retries and not self._shutdown_flag:
             try:
-                # Create new event loop for each retry
-                if self.loop and not self.loop.is_closed():
-                    self.loop.close()
-                    
+                # Koyeb के लिए explicit event loop management
                 self.loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(self.loop)
                 
                 logger.info(f"Initializing UserBot... (Attempt {retry_count + 1})")
                 
-                # Initialize userbot
+                # Initialize userbot first
                 self.loop.run_until_complete(self.initialize_userbot())
                 
                 # Initialize bot application
@@ -398,21 +387,14 @@ class TwitterBot:
 
                 logger.info("Bot started successfully! Waiting for messages...")
                 
-                # Run bot polling
-                self.loop.run_until_complete(self.bot_app.run_polling(
-                    stop_signals=None,  # Disable default signal handlers
-                    close_loop=False    # Don't close loop automatically
-                ))
-                
-                # If we reach here, bot stopped normally
-                break
+                # Koyeb के लिए polling start करें
+                self.bot_app.run_polling(
+                    close_loop=False,
+                    stop_signals=[]
+                )
                 
             except KeyboardInterrupt:
                 logger.info("Received keyboard interrupt, shutting down...")
-                break
-                
-            except SystemExit:
-                logger.info("System exit received, shutting down...")
                 break
                 
             except Exception as e:
@@ -421,37 +403,17 @@ class TwitterBot:
                 
                 if retry_count < max_retries:
                     logger.info(f"Retrying in 10 seconds...")
-                    # Clean shutdown before retry
                     try:
                         self.loop.run_until_complete(self.shutdown())
                     except:
                         pass
-                    
-                    # Wait before retry
                     import time
                     time.sleep(10)
                 else:
                     logger.error("Maximum retries reached. Exiting...")
                     break
-                    
-        # Final cleanup
-        try:
-            if self.loop and not self.loop.is_closed():
-                self.loop.run_until_complete(self.shutdown())
-                self.loop.close()
-        except Exception as e:
-            logger.error(f"Error in final cleanup: {e}")
-        
-        logger.info("Bot completely shut down")
-
 
 if __name__ == '__main__':
+    logger.info("Starting Twitter Bot on Koyeb...")
     bot = TwitterBot()
-    try:
-        bot.run()
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-    finally:
-        logger.info("Application terminated")
+    bot.run()
