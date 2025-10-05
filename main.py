@@ -42,6 +42,7 @@ class TwitterBot:
         self.http_app = None
         self.runner = None
         self.site = None
+        self.polling_task = None
 
     async def health_check(self, request):
         """Health check endpoint for Koyeb"""
@@ -357,14 +358,49 @@ class TwitterBot:
                 await update.message.reply_text(error_msg)
             self._reset_flags()
 
+    async def start_polling(self):
+        """Start bot polling in a separate task"""
+        try:
+            # Bot application start करें
+            logger.info("Starting Telegram Bot...")
+            self.bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+            # Add handlers
+            self.bot_app.add_handler(CommandHandler("start", self.start_command))
+            self.bot_app.add_handler(CommandHandler("task", self.start_task))
+            self.bot_app.add_handler(CommandHandler("task2", self.start_task2))
+            self.bot_app.add_handler(CommandHandler("endtask", self.end_task))
+            self.bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_link))
+
+            logger.info("Bot started successfully! Waiting for messages...")
+            
+            # Bot polling start करें
+            await self.bot_app.initialize()
+            await self.bot_app.start()
+            await self.bot_app.updater.start_polling()
+            
+            # Keep the polling running
+            while not self._shutdown_flag:
+                await asyncio.sleep(1)
+                
+        except Exception as e:
+            logger.error(f"Error in polling: {e}")
+            raise
+        finally:
+            if self.bot_app:
+                await self.bot_app.updater.stop()
+                await self.bot_app.stop()
+                await self.bot_app.shutdown()
+
     async def shutdown(self):
         """Shutdown all services properly"""
         logger.info("Shutting down services...")
         self._shutdown_flag = True
         
         try:
-            if self.bot_app:
+            if self.bot_app and self.bot_app.running:
                 logger.info("Stopping bot application...")
+                await self.bot_app.updater.stop()
                 await self.bot_app.stop()
                 await self.bot_app.shutdown()
                 
@@ -392,21 +428,8 @@ class TwitterBot:
             logger.info("Initializing UserBot...")
             await self.initialize_userbot()
             
-            # Bot application start करें
-            logger.info("Starting Telegram Bot...")
-            self.bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-            # Add handlers
-            self.bot_app.add_handler(CommandHandler("start", self.start_command))
-            self.bot_app.add_handler(CommandHandler("task", self.start_task))
-            self.bot_app.add_handler(CommandHandler("task2", self.start_task2))
-            self.bot_app.add_handler(CommandHandler("endtask", self.end_task))
-            self.bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_link))
-
-            logger.info("Bot started successfully! Waiting for messages...")
-            
-            # Bot polling start करें
-            await self.bot_app.run_polling()
+            # Start polling in the current event loop
+            await self.start_polling()
             
         except Exception as e:
             logger.error(f"Error in run_async: {e}")
@@ -419,6 +442,7 @@ class TwitterBot:
         
         while retry_count < max_retries and not self._shutdown_flag:
             try:
+                # Create new event loop for each attempt
                 self.loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(self.loop)
                 
@@ -436,9 +460,10 @@ class TwitterBot:
                 if retry_count < max_retries:
                     logger.info(f"Retrying in 10 seconds...")
                     try:
-                        self.loop.run_until_complete(self.shutdown())
-                    except:
-                        pass
+                        if self.loop and not self.loop.is_closed():
+                            self.loop.run_until_complete(self.shutdown())
+                    except Exception as shutdown_error:
+                        logger.error(f"Error during shutdown: {shutdown_error}")
                     import time
                     time.sleep(10)
                 else:
@@ -446,7 +471,10 @@ class TwitterBot:
                     break
             finally:
                 if self.loop and not self.loop.is_closed():
-                    self.loop.run_until_complete(self.shutdown())
+                    try:
+                        self.loop.run_until_complete(self.shutdown())
+                    except Exception as e:
+                        logger.error(f"Error in final shutdown: {e}")
                     self.loop.close()
 
 if __name__ == '__main__':
