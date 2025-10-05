@@ -50,6 +50,8 @@ class AICaptionEnhancer:
         - Return only the enhanced caption
         - Make it look human-generated, not AI
         - The text should work well in italic format
+        - DO NOT include #AIEnhanced or any similar AI-related hashtags
+        - DO NOT mention that it's AI generated or enhanced
         """
         
         return prompt
@@ -68,7 +70,7 @@ class AICaptionEnhancer:
             "messages": [
                 {
                     "role": "system", 
-                    "content": "You are a social media expert who enhances captions to make them more engaging and viral. Always return only the enhanced caption without any explanations and make sure it looks good in italic formatting."
+                    "content": "You are a social media expert who enhances captions to make them more engaging and viral. Always return only the enhanced caption without any explanations and make sure it looks good in italic formatting. Never include #AIEnhanced or any AI-related hashtags."
                 },
                 {
                     "role": "user",
@@ -112,7 +114,7 @@ class AICaptionEnhancer:
         # Remove quotes if present
         text = text.strip('"\'')
         
-        # Remove common AI prefixes
+        # Remove common AI prefixes and hashtags
         prefixes_to_remove = [
             "Enhanced caption:",
             "Here's the enhanced caption:",
@@ -120,16 +122,29 @@ class AICaptionEnhancer:
             "Enhanced:",
             "News-style caption:",
             "Here is the enhanced caption:",
-            "Viral caption:"
+            "Viral caption:",
+            "#AIEnhanced",
+            "#AI",
+            "#Enhanced"
         ]
         
         for prefix in prefixes_to_remove:
             if text.lower().startswith(prefix.lower()):
                 text = text[len(prefix):].strip()
-                
+            # Also remove if it appears anywhere in the text
+            text = text.replace(prefix, "")
+        
+        # Remove any AI-related hashtags using regex
+        ai_hashtags = [r'#AIEnhanced\b', r'#AIGenerated\b', r'#AI\b', r'#EnhancedByAI\b']
+        for hashtag in ai_hashtags:
+            text = re.sub(hashtag, '', text, flags=re.IGNORECASE)
+        
         # Remove any existing markdown formatting
         text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # Remove bold
         text = re.sub(r'\*(.*?)\*', r'\1', text)      # Remove italic
+        
+        # Clean up extra spaces
+        text = re.sub(r'\s+', ' ', text).strip()
         
         # Apply italic formatting to the entire text
         text = f"*{text}*"
@@ -155,7 +170,7 @@ class AICaptionEnhancer:
         """
         Test API connection using the working "sonar" model
         """
-        if not self.api_key:
+        if if not self.api_key:
             return False, "No API key provided"
             
         try:
