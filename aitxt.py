@@ -37,17 +37,23 @@ class AICaptionEnhancer:
 
     def _create_enhancement_prompt(self, original_text, twitter_link=None):
         """
-        Create prompt for AI enhancement
+        Create prompt for AI enhancement with longer text and Hindi translation
         """
         prompt = f"""
-        Make this Twitter caption more engaging and viral: "{original_text}"
+        Enhance this Twitter caption to make it more engaging and viral: "{original_text}"
         
-        Rules:
-        - Make it attention-grabbing  
-        - Use 1-2 emojis if relevant
-        - Keep original meaning
-        - Make it sound like breaking news
-        - Return only the enhanced caption
+        Requirements:
+        - Make it longer and more detailed (2-3 sentences)
+        - Keep original meaning but expand with relevant context
+        - Make it attention-grabbing and news-style
+        - Use 2-3 relevant emojis
+        - Add a Hindi translation at the end with "हिंदी अनुवाद:" prefix
+        - Return format: English enhanced caption followed by Hindi translation
+        
+        Example format:
+        Breaking news! [expanded context]. This development could [impact/importance]. 🚀📢
+
+        हिंदी अनुवाद: [Hindi translation here]
         """
         
         return prompt
@@ -66,14 +72,14 @@ class AICaptionEnhancer:
             "messages": [
                 {
                     "role": "system", 
-                    "content": "You are a social media expert who enhances captions to make them more engaging and viral. Always return only the enhanced caption without any explanations."
+                    "content": "You are a social media expert who enhances captions to make them more engaging and viral. You create longer, detailed captions and provide Hindi translations. Always return both English and Hindi versions in the specified format."
                 },
                 {
                     "role": "user",
                     "content": prompt
                 }
             ],
-            "max_tokens": 100,
+            "max_tokens": 200,  # Increased tokens for longer text
             "temperature": 0.7
         }
         
@@ -110,7 +116,7 @@ class AICaptionEnhancer:
         # Remove quotes if present
         text = text.strip('"\'')
         
-        # Remove common AI prefixes
+        # Remove common AI prefixes but keep the structure
         prefixes_to_remove = [
             "Enhanced caption:",
             "Here's the enhanced caption:",
@@ -125,7 +131,7 @@ class AICaptionEnhancer:
             if text.lower().startswith(prefix.lower()):
                 text = text[len(prefix):].strip()
                 
-        # Remove any markdown formatting
+        # Remove any markdown formatting but keep emojis and Hindi text
         text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # Remove bold
         text = re.sub(r'\*(.*?)\*', r'\1', text)      # Remove italic
         
