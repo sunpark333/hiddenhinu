@@ -6,8 +6,8 @@ import sys
 from aiohttp import web
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from datetime import datetime, timedelta
 import re
 from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, TIMEZONE, ADMIN_IDS
@@ -28,7 +28,7 @@ class TwitterBot:
         self.scheduled_messages = []
         self.last_processed_message_id = None
         self.incremental_schedule_mode = False
-        self.fixed_interval_mode = False  # New mode for task3
+        self.fixed_interval_mode = False
         self.quality_selection_timeout = 60
         self._shutdown_flag = False
         self.http_app = None
@@ -65,7 +65,6 @@ class TwitterBot:
         runner = web.AppRunner(self.http_app)
         await runner.setup()
         
-        # Koyeb के लिए PORT environment variable use करें
         port = int(os.environ.get('PORT', 8000))
         site = web.TCPSite(runner, '0.0.0.0', port)
         await site.start()
@@ -88,16 +87,13 @@ class TwitterBot:
             await self.userbot.start()
             logger.info("UserBot successfully started")
 
-            # Event handler for twittervid_bot
             @self.userbot.on(events.NewMessage(from_users=TWITTER_VID_BOT))
             async def handle_twittervid_message(event):
                 await self._handle_twittervid_response(event)
 
-            # Test connection
             me = await self.userbot.get_me()
             logger.info(f"UserBot started as: {me.username} (ID: {me.id})")
 
-            # Channel access test
             try:
                 channel = await self.userbot.get_entity(YOUR_CHANNEL_ID)
                 logger.info(f"Verified access to channel: {channel.title}")
@@ -122,6 +118,15 @@ class TwitterBot:
                 
                 message_text = event.message.text or ""
                 logger.info(f"Received message from twittervid_bot: {message_text[:100]}...")
+
+                # Delete previous messages from twittervid_bot to keep chat clean
+                try:
+                    async for old_msg in self.userbot.iter_messages(TWITTER_VID_BOT, limit=5):
+                        if old_msg.id < event.message.id:
+                            await old_msg.delete()
+                            await asyncio.sleep(1)
+                except Exception as e:
+                    logger.warning(f"Could not delete old messages: {str(e)}")
 
                 if "Select Video Quality" in message_text and not self.quality_selected:
                     logger.info("Quality selection detected")
@@ -234,21 +239,16 @@ class TwitterBot:
         now = datetime.now(TIMEZONE)
 
         if self.scheduled_mode:
-            # Original task mode - daily at 7 AM with 1 hour intervals
             scheduled_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
             if scheduled_time < now:
                 scheduled_time += timedelta(days=1)
             scheduled_time += timedelta(hours=self.scheduled_counter)
         elif self.incremental_schedule_mode:
-            # Task2 mode - incremental scheduling
             scheduled_time = now + timedelta(hours=self.scheduled_counter + 2)
         elif self.fixed_interval_mode:
-            # Task3 mode - fixed 2 hour interval starting from 7 AM
-            # Calculate next 7 AM
             scheduled_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
             if scheduled_time < now:
                 scheduled_time += timedelta(days=1)
-            # Add 2 hours for each subsequent post
             scheduled_time += timedelta(hours=2 * self.scheduled_counter)
         else:
             scheduled_time = now
@@ -279,26 +279,54 @@ class TwitterBot:
         return cleaned_text
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start command handler"""
-        # Admin check
+        """Start command handler with buttons"""
         if not await self.admin_only(update, context):
             return
+
+        keyboard = [
+            [
+                InlineKeyboardButton("1 hour", callback_data="task_1hour"),
+                InlineKeyboardButton("now send", callback_data="task2_nowsend")
+            ],
+            [
+                InlineKeyboardButton("2 hour", callback_data="task3_2hour")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
             "🤖 **Twitter Video Bot Started!**\n\n"
             "📤 **Send any Twitter/X link to download and forward videos.**\n\n"
-            "📋 **Available Commands:**\n"
-            "• /task - Schedule posts daily at 7 AM with 1-hour intervals\n"
-            "• /task2 - Incremental scheduling (2h, 3h, 4h...)\n"
-            "• /task3 - Fixed 2-hour intervals starting from 7 AM\n"
-            "• /endtask - Stop scheduling and post immediately\n\n"
-            "🎯 **Type commands to use the bot:**"
+            "📋 **Available Scheduling Modes:**\n"
+            "• **1 hour** - Daily at 7 AM with 1-hour intervals\n"
+            "• **now send** - Incremental scheduling (2h, 3h, 4h...)\n"
+            "• **2 hour** - Fixed 2-hour intervals starting from 7 AM\n\n"
+            "🎯 **Select a scheduling mode or send link directly:**",
+            reply_markup=reply_markup
         )
+
+    async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle button callbacks"""
+        query = update.callback_query
+        await query.answer()
+
+        if not self.is_admin(query.from_user.id):
+            await query.edit_message_text(
+                "🚫 **Access Denied!**\n\n"
+                "You are not authorized to use this bot."
+            )
+            return
+
+        if query.data == "task_1hour":
+            await self.start_task(query, context)
+        elif query.data == "task2_nowsend":
+            await self.start_task2(query, context)
+        elif query.data == "task3_2hour":
+            await self.start_task3(query, context)
 
     async def start_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start scheduled posting mode"""
-        # Admin check
-        if not await self.admin_only(update, context):
+        if hasattr(update, 'message') and not await self.admin_only(update, context):
             return
 
         self.scheduled_mode = True
@@ -312,17 +340,21 @@ class TwitterBot:
         if first_schedule_time < now:
             first_schedule_time += timedelta(days=1)
 
-        await update.message.reply_text(
-            "📅 **Scheduled Mode Activated!**\n\n"
+        response_text = (
+            "📅 **1 Hour Mode Activated!**\n\n"
             f"⏰ First video: {first_schedule_time.strftime('%Y-%m-%d %H:%M')} IST\n"
             f"🕐 Each new video: +1 hour interval\n\n"
             "❌ Use /endtask to stop scheduled posting."
         )
 
+        if hasattr(update, 'message'):
+            await update.message.reply_text(response_text)
+        else:
+            await update.edit_message_text(response_text)
+
     async def start_task2(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start incremental scheduled posting mode"""
-        # Admin check
-        if not await self.admin_only(update, context):
+        if hasattr(update, 'message') and not await self.admin_only(update, context):
             return
 
         self.incremental_schedule_mode = True
@@ -334,17 +366,21 @@ class TwitterBot:
         now = datetime.now(TIMEZONE)
         first_schedule_time = now + timedelta(hours=2)
 
-        await update.message.reply_text(
-            "⏱️ **Incremental Scheduled Mode Activated!**\n\n"
+        response_text = (
+            "⏱️ **Now Send Mode Activated!**\n\n"
             f"⏰ First video: {first_schedule_time.strftime('%Y-%m-%d %H:%M')} IST\n"
             f"🕐 Next intervals: +2h, +3h, +4h...\n\n"
             "❌ Use /endtask to stop scheduled posting."
         )
 
+        if hasattr(update, 'message'):
+            await update.message.reply_text(response_text)
+        else:
+            await update.edit_message_text(response_text)
+
     async def start_task3(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start fixed 2-hour interval scheduling mode starting from 7 AM"""
-        # Admin check
-        if not await self.admin_only(update, context):
+        if hasattr(update, 'message') and not await self.admin_only(update, context):
             return
 
         self.fixed_interval_mode = True
@@ -353,7 +389,6 @@ class TwitterBot:
         self.scheduled_counter = 0
         self.scheduled_messages = []
 
-        # Calculate schedule times
         now = datetime.now(TIMEZONE)
         first_schedule_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
         if first_schedule_time < now:
@@ -362,8 +397,8 @@ class TwitterBot:
         second_schedule_time = first_schedule_time + timedelta(hours=2)
         third_schedule_time = first_schedule_time + timedelta(hours=4)
 
-        await update.message.reply_text(
-            "🕑 **Fixed Interval Mode Activated!**\n\n"
+        response_text = (
+            "🕑 **2 Hour Mode Activated!**\n\n"
             f"⏰ Schedule starts at: 7:00 AM IST\n"
             f"🕐 Fixed interval: Every 2 hours\n\n"
             f"📅 Example schedule:\n"
@@ -373,9 +408,13 @@ class TwitterBot:
             "❌ Use /endtask to stop scheduled posting."
         )
 
+        if hasattr(update, 'message'):
+            await update.message.reply_text(response_text)
+        else:
+            await update.edit_message_text(response_text)
+
     async def end_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """End scheduled posting mode"""
-        # Admin check
         if not await self.admin_only(update, context):
             return
 
@@ -396,7 +435,6 @@ class TwitterBot:
     async def process_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Process Twitter links"""
         try:
-            # Admin check
             if not await self.admin_only(update, context):
                 return
 
@@ -453,7 +491,6 @@ class TwitterBot:
     async def start_polling(self):
         """Start bot polling in a separate task"""
         try:
-            # Bot application start करें
             logger.info("Starting Telegram Bot...")
             self.bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -464,15 +501,14 @@ class TwitterBot:
             self.bot_app.add_handler(CommandHandler("task3", self.start_task3))
             self.bot_app.add_handler(CommandHandler("endtask", self.end_task))
             self.bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_link))
+            self.bot_app.add_handler(CallbackQueryHandler(self.button_handler))
 
             logger.info("Bot started successfully! Waiting for messages...")
             
-            # Bot polling start करें
             await self.bot_app.initialize()
             await self.bot_app.start()
             await self.bot_app.updater.start_polling()
             
-            # Keep the polling running
             while not self._shutdown_flag:
                 await asyncio.sleep(1)
                 
@@ -513,15 +549,12 @@ class TwitterBot:
     async def run_async(self):
         """Async main function"""
         try:
-            # HTTP server start करें
             logger.info("Starting HTTP server for health checks...")
             self.runner, self.site = await self.start_http_server()
             
-            # UserBot initialize करें
             logger.info("Initializing UserBot...")
             await self.initialize_userbot()
             
-            # Start polling in the current event loop
             await self.start_polling()
             
         except Exception as e:
@@ -535,7 +568,6 @@ class TwitterBot:
         
         while retry_count < max_retries and not self._shutdown_flag:
             try:
-                # Create new event loop for each attempt
                 self.loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(self.loop)
                 
