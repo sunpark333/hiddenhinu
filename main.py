@@ -7,22 +7,10 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timedelta
 import re
+from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, TIMEZONE
 
-# Load environment variables
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-# Bot configuration settings
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-API_ID = os.getenv('API_ID')
-API_HASH = os.getenv('API_HASH')
-PHONE_NUMBER = os.getenv('PHONE_NUMBER')
-TWITTER_VID_BOT = os.getenv('TWITTER_VID_BOT', 'twittervid_bot')
-YOUR_CHANNEL_ID = int(os.getenv('YOUR_CHANNEL_ID', '-1001737011271'))
-TIMEZONE = pytz.timezone(os.getenv('TIMEZONE', 'Asia/Kolkata'))
+# Set timezone
+TIMEZONE = pytz.timezone(TIMEZONE)
 
 # Logging setup
 logging.basicConfig(
@@ -47,6 +35,163 @@ class TwitterBot:
         self.incremental_schedule_mode = False
         self.quality_selection_timeout = 30
 
+    async def initialize_userbot(self):
+        """Initialize Telegram userbot with string session"""
+        try:
+            # String session se initialize karein
+            self.userbot = TelegramClient(
+                session=TELEGRAM_SESSION_STRING,
+                api_id=int(API_ID),
+                api_hash=API_HASH,
+                loop=self.loop
+            )
+            
+            await self.userbot.start()
+            
+            logger.info("UserBot successfully started with string session")
+            
+            # Event handler for twittervid_bot
+            @self.userbot.on(events.NewMessage(from_users=TWITTER_VID_BOT))
+            async def handle_twittervid_message(event):
+                await self._handle_twittervid_response(event)
+                
+            # Test connection
+            me = await self.userbot.get_me()
+            logger.info(f"Bot started as: {me.username}")
+            
+            # Channel access test
+            try:
+                test_message = await self.userbot.send_message(YOUR_CHANNEL_ID, "🤖 Bot initialized and ready!")
+                await test_message.delete()
+                logger.info(f"Verified access to channel {YOUR_CHANNEL_ID}")
+            except Exception as e:
+                logger.error(f"Channel access failed: {str(e)}")
+                raise
+                
+        except Exception as e:
+            logger.error(f"Failed to initialize userbot: {str(e)}")
+            raise
+
+    async def _handle_twittervid_response(self, event):
+        """Handle responses from twittervid_bot"""
+        try:
+            if self.last_processed_message_id is not None and event.message.id <= self.last_processed_message_id:
+                return
+                
+            self.last_processed_message_id = event.message.id
+            
+            if self.waiting_for_video and self.current_update:
+                await asyncio.sleep(2)  # Increased delay for stability
+                
+                # Handle quality selection
+                if "Select Video Quality" in event.message.text and not self.quality_selected:
+                    logger.info("Quality selection detected")
+                    try:
+                        buttons = await event.message.get_buttons()
+                        if buttons:
+                            # First row ke buttons check karein
+                            if len(buttons) > 0 and len(buttons[0]) > 0:
+                                await buttons[0][0].click()  # First button click karein
+                                quality = buttons[0][0].text
+                                logger.info(f"Selected quality: {quality}")
+                                
+                                if self.current_update and self.current_update.message:
+                                    await self.current_update.message.reply_text(
+                                        f"✅ Video is being downloaded in {quality} quality..."
+                                    )
+                                self.quality_selected = True
+                                return
+                    except Exception as e:
+                        logger.error(f"Error in quality selection: {str(e)}")
+                
+                # Handle received video/media
+                if (event.message.media or event.message.text) and self.quality_selected:
+                    await self._process_received_video(event)
+                    
+        except Exception as e:
+            logger.error(f"Error in handle_twittervid_message: {str(e)}")
+
+    async def _process_received_video(self, event):
+        """Process received video and send to channel"""
+        try:
+            caption = self.clean_text(event.message.text) if event.message.text else ""
+            
+            if caption:
+                caption = f"\n\n{caption}\n\n"
+            else:
+                caption = "\n\n"
+            
+            if self.scheduled_mode or self.incremental_schedule_mode:
+                scheduled_time = self._calculate_schedule_time()
+                
+                if event.message.media:
+                    message = await self.userbot.send_file(
+                        YOUR_CHANNEL_ID,
+                        file=event.message.media,
+                        caption=caption,
+                        schedule=scheduled_time
+                    )
+                else:
+                    message = await self.userbot.send_message(
+                        YOUR_CHANNEL_ID,
+                        caption,
+                        schedule=scheduled_time
+                    )
+                
+                self.scheduled_counter += 1
+                self.scheduled_messages.append(message.id)
+                
+                if self.current_update and self.current_update.message:
+                    await self.current_update.message.reply_text(
+                        f"✅ Video successfully scheduled for {scheduled_time.strftime('%Y-%m-%d %H:%M')} IST!"
+                    )
+            else:
+                if event.message.media:
+                    await self.userbot.send_file(
+                        YOUR_CHANNEL_ID,
+                        file=event.message.media,
+                        caption=caption
+                    )
+                else:
+                    await self.userbot.send_message(
+                        YOUR_CHANNEL_ID,
+                        caption
+                    )
+                
+                if self.current_update and self.current_update.message:
+                    await self.current_update.message.reply_text("✅ Video successfully sent to your channel!")
+            
+            logger.info(f"Message sent to channel {YOUR_CHANNEL_ID}")
+            self._reset_flags()
+            
+        except Exception as e:
+            error_msg = f"❌ Error sending video to channel: {str(e)}"
+            logger.error(error_msg)
+            if self.current_update and self.current_update.message:
+                await self.current_update.message.reply_text(error_msg)
+            self._reset_flags()
+
+    def _calculate_schedule_time(self):
+        """Calculate schedule time based on mode"""
+        now = datetime.now(TIMEZONE)
+        
+        if self.scheduled_mode:
+            scheduled_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
+            if scheduled_time < now:
+                scheduled_time += timedelta(days=1)
+            scheduled_time += timedelta(hours=self.scheduled_counter)
+        else:
+            scheduled_time = now + timedelta(hours=self.scheduled_counter + 2)
+        
+        return scheduled_time
+
+    def _reset_flags(self):
+        """Reset processing flags"""
+        self.video_received = True
+        self.waiting_for_video = False
+        self.current_update = None
+        self.quality_selected = False
+
     def clean_text(self, text):
         """Remove last 3 lines and clean text"""
         if not text:
@@ -57,131 +202,14 @@ class TwitterBot:
             lines = lines[:-3]
         cleaned_text = '\n'.join(lines)
         
+        # Remove hidden links if any
         hidden_link_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
         cleaned_text = re.sub(hidden_link_pattern, r'\1', cleaned_text)
         
+        # Remove banned text pattern
         cleaned_text = cleaned_text.replace('📲 @twittervid_bot', '').strip()
         
         return cleaned_text
-
-    def generate_divider(self):
-        """Generate divider line"""
-        return ""
-
-    async def initialize_userbot(self):
-        """Initialize Telegram userbot"""
-        self.userbot = TelegramClient('userbot_session', int(API_ID), API_HASH, loop=self.loop)
-        await self.userbot.start(PHONE_NUMBER)
-        
-        @self.userbot.on(events.NewMessage(from_users=TWITTER_VID_BOT))
-        async def handle_twittervid_message(event):
-            try:
-                if self.last_processed_message_id is not None and event.message.id <= self.last_processed_message_id:
-                    return
-                    
-                self.last_processed_message_id = event.message.id
-                
-                if self.waiting_for_video and self.current_update:
-                    await asyncio.sleep(1)
-                    
-                    if "Select Video Quality" in event.message.text and not self.quality_selected:
-                        buttons = await event.message.get_buttons()
-                        if buttons and len(buttons) > 1 and len(buttons[1]) > 0:
-                            await buttons[1][0].click()
-                            quality = buttons[1][0].text
-                            if self.current_update and self.current_update.message:
-                                await self.current_update.message.reply_text(
-                                    f"✅ Video is being downloaded in {quality} quality..."
-                                )
-                            self.quality_selected = True
-                            return
-                    
-                    if (event.message.media or event.message.text) and self.quality_selected:
-                        try:
-                            caption = self.clean_text(event.message.text) if event.message.text else ""
-                            divider = self.generate_divider()
-                            if caption:
-                                caption = f"{divider}\n\n{caption}\n\n{divider}"
-                            else:
-                                caption = f"{divider}\n\n{divider}"
-                            
-                            if self.scheduled_mode or self.incremental_schedule_mode:
-                                now = datetime.now(TIMEZONE)
-                                
-                                if self.scheduled_mode:
-                                    scheduled_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
-                                    if scheduled_time < now:
-                                        scheduled_time += timedelta(days=1)
-                                    scheduled_time += timedelta(hours=self.scheduled_counter)
-                                else:
-                                    scheduled_time = now + timedelta(hours=self.scheduled_counter + 2)
-                                
-                                if event.message.media:
-                                    message = await self.userbot.send_file(
-                                        YOUR_CHANNEL_ID,
-                                        file=event.message.media,
-                                        caption=caption,
-                                        schedule=scheduled_time,
-                                        parse_mode='Markdown'
-                                    )
-                                else:
-                                    message = await self.userbot.send_message(
-                                        YOUR_CHANNEL_ID,
-                                        caption,
-                                        schedule=scheduled_time,
-                                        parse_mode='Markdown'
-                                    )
-                                
-                                self.scheduled_counter += 1
-                                self.scheduled_messages.append(message.id)
-                                
-                                if self.current_update and self.current_update.message:
-                                    await self.current_update.message.reply_text(
-                                        f"✅ Video successfully scheduled for {scheduled_time.strftime('%Y-%m-%d %H:%M')} IST!"
-                                    )
-                            else:
-                                if event.message.media:
-                                    await self.userbot.send_file(
-                                        YOUR_CHANNEL_ID,
-                                        file=event.message.media,
-                                        caption=caption,
-                                        parse_mode='Markdown'
-                                    )
-                                else:
-                                    await self.userbot.send_message(
-                                        YOUR_CHANNEL_ID,
-                                        caption,
-                                        parse_mode='Markdown'
-                                    )
-                                
-                                if self.current_update and self.current_update.message:
-                                    await self.current_update.message.reply_text("✅ Video successfully sent to your channel!")
-                            
-                            logger.info(f"Message sent to channel {YOUR_CHANNEL_ID}")
-                            self.video_received = True
-                            self.waiting_for_video = False
-                            self.current_update = None
-                            self.quality_selected = False
-                        except Exception as e:
-                            error_msg = f"❌ Error sending video to channel: {str(e)}"
-                            logger.error(error_msg)
-                            if self.current_update and self.current_update.message:
-                                await self.current_update.message.reply_text(error_msg)
-                            self.waiting_for_video = False
-                            self.current_update = None
-                            self.quality_selected = False
-            except Exception as e:
-                logger.error(f"Error in handle_twittervid_message: {str(e)}")
-        
-        logger.info("UserBot successfully started")
-        try:
-            me = await self.userbot.get_me()
-            test_message = await self.userbot.send_message(YOUR_CHANNEL_ID, "Bot initialized and ready to forward videos")
-            await test_message.delete()
-            logger.info(f"Verified access to channel {YOUR_CHANNEL_ID}")
-        except Exception as e:
-            logger.error(f"Failed to access channel: {str(e)}")
-            raise
 
     async def start_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start scheduled posting mode"""
@@ -241,6 +269,7 @@ class TwitterBot:
             message = update.message
             text = message.text
             
+            # Clean the text (removes last 3 lines and other unwanted content)
             text = self.clean_text(text)
             
             if not text:
@@ -254,17 +283,20 @@ class TwitterBot:
             
             await message.reply_text("⏳ Processing link and downloading video...")
             
+            # Send the link to twittervid_bot
             await self.userbot.send_message(TWITTER_VID_BOT, text)
-            logger.info(f"Link sent: {text}")
+            logger.info(f"Link sent to twittervid_bot: {text}")
             
+            # Wait for quality selection response
             start_time = datetime.now()
-            while not self.quality_selected:
+            while not self.quality_selected and (datetime.now() - start_time).seconds < self.quality_selection_timeout:
                 await asyncio.sleep(1)
-                if (datetime.now() - start_time).seconds > self.quality_selection_timeout:
-                    await message.reply_text("⚠️ Timeout waiting for quality selection. Please try again.")
-                    self.waiting_for_video = False
-                    self.current_update = None
-                    return
+                
+            if not self.quality_selected:
+                await message.reply_text("⚠️ Timeout waiting for quality selection. Please try again.")
+                self.waiting_for_video = False
+                self.current_update = None
+                return
 
         except Exception as e:
             error_msg = f"❌ Error processing link: {str(e)}"
@@ -280,8 +312,10 @@ class TwitterBot:
         asyncio.set_event_loop(self.loop)
         
         try:
+            # First userbot initialize karein
             self.loop.run_until_complete(self.initialize_userbot())
             
+            # Phir bot app start karein
             self.bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
             self.bot_app.add_handler(CommandHandler("task", self.start_task))
             self.bot_app.add_handler(CommandHandler("task2", self.start_task2))
