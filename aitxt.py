@@ -1,325 +1,441 @@
 import logging
 import aiohttp
-import asyncio
 import json
 import re
-from typing import Optional, Tuple
 from config import PERPLEXITY_API_KEY
 
 logger = logging.getLogger(__name__)
 
 class AICaptionEnhancer:
-    """
-    Twitter/X caption enhancement service using Perplexity API.
-    - Default: tries best-quality model first, then fallbacks.
-    - Optional: strict_mode to disable fallback.
-    - Robust cleaning and error handling.
-    """
-
-    def __init__(
-        self,
-        preferred_model: Optional[str] = None,
-        strict_mode: bool = False,
-        request_timeout: int = 30,
-        temperature: float = 0.8,
-        top_p: float = 0.9,
-        max_tokens: int = 100
-    ):
+    def __init__(self):
         self.api_key = PERPLEXITY_API_KEY
         self.base_url = "https://api.perplexity.ai/chat/completions"
-
-        # Best to least preference
         self.available_models = [
-            "llama-3.1-sonar-huge-128k-online",   # Best quality & reasoning
-            "llama-3.1-sonar-large-128k-online",  # Balance of quality/speed
-            "llama-3.1-sonar-small-128k-online",  # Fastest among sonar
-            "llama-3.1-70b-instruct",             # Strong instruct
-            "llama-3.1-8b-instruct"               # Budget/fast
+            "llama-3.1-sonar-small-128k-online",
+            "llama-3.1-sonar-large-128k-online", 
+            "sonar-small-online",
+            "sonar-medium-online",
+            "sonar-large-online",
+            "llama-3.1-8b-instruct",
+            "llama-3.1-70b-instruct"
         ]
-
-        # If user prefers a specific model and it exists, prioritize it first
-        if preferred_model and preferred_model in self.available_models:
-            # Move preferred to index 0 for first attempt
-            self.available_models.remove(preferred_model)
-            self.available_models.insert(0, preferred_model)
-
-        self.strict_mode = strict_mode
-        self.request_timeout = request_timeout
-        self.temperature = temperature
-        self.top_p = top_p
-        self.max_tokens = max_tokens
-
-    async def enhance_caption(self, original_text: str, twitter_link: Optional[str] = None) -> str:
+        self.current_model_index = 0
+        
+    async def enhance_caption(self, original_text, twitter_link=None):
         """
-        Enhance caption using Perplexity AI to make it more engaging and news-style.
-        Tries the best model first, with fallbacks unless strict_mode is True.
+        Enhance caption using Perplexity AI to make it more engaging and news-style
         """
         if not self.api_key:
             logger.warning("Perplexity API key not found. Returning original caption.")
             return original_text
-
-        if not self.is_meaningful_text(original_text):
-            logger.info("Original text not meaningful enough to enhance; returning original.")
+            
+        if not original_text or len(original_text.strip()) < 10:
             return original_text
 
-        prompt = self._create_enhancement_prompt(original_text, twitter_link)
-
-        # Strict mode: call only the top model and return
-        if self.strict_mode:
-            top_model = self.available_models[0]
-            logger.info(f"Strict mode: trying only model {top_model}")
+        # Try all available models
+        for attempt in range(len(self.available_models)):
             try:
-                enhanced_text = await self._call_perplexity_api(prompt, top_model)
-                if self._is_valid_output(enhanced_text):
-                    return enhanced_text.strip()
-            except Exception as e:
-                logger.error(f"Strict mode call failed for {top_model}: {e}")
-            return original_text
-
-        # Non-strict: iterate through models with smart fallback
-        for idx, model in enumerate(self.available_models):
-            try:
+                model = self.available_models[self.current_model_index]
                 logger.info(f"Trying AI model: {model}")
+                
+                prompt = self._create_enhancement_prompt(original_text, twitter_link)
                 enhanced_text = await self._call_perplexity_api(prompt, model)
-                if self._is_valid_output(enhanced_text):
+                
+                if enhanced_text and len(enhanced_text.strip()) > 20:
                     logger.info(f"Successfully enhanced caption using {model}")
                     return enhanced_text.strip()
                 else:
-                    logger.warning(f"AI returned empty/invalid response with model {model}")
+                    logger.warning(f"AI returned empty response with model {model}")
+                    
             except Exception as e:
-                logger.error(f"Error with model {model}: {str(e)}")
+                logger.error(f"Error with model {self.available_models[self.current_model_index]}: {str(e)}")
+            
+            # Try next model
+            self.current_model_index = (self.current_model_index + 1) % len(self.available_models)
+            
+            # Don't wait between attempts for the same request
+            if attempt < len(self.available_models) - 1:
+                logger.info(f"Trying next model...")
 
-            if idx < len(self.available_models) - 1:
-                logger.info("Trying next model...")
-                # Small jitter to avoid hitting same rate limits across retries
-                await asyncio.sleep(0.2)
-
-        logger.error("All AI models failed, returning original caption.")
+        logger.error("All AI models failed, returning original caption")
         return original_text
 
-    def _create_enhancement_prompt(self, original_text: str, twitter_link: Optional[str] = None) -> str:
+    def _create_enhancement_prompt(self, original_text, twitter_link=None):
         """
-        Create prompt for AI enhancement with strict output instruction.
+        Create prompt for AI enhancement
         """
         prompt = f"""
-You are a social media expert. Enhance this Twitter/X post caption to make it more engaging, professional, and news-style.
-Keep the core meaning but make it more compelling for a social media audience.
-
-Original caption: "{original_text}"
-
-Enhancement Guidelines:
-1) Make it engaging and click-worthy
-2) Use 1-2 relevant emojis if appropriate
-3) Keep it concise (1-2 lines maximum)
-4) Maintain the original intent and facts
-5) Add 1-2 relevant hashtags if they fit naturally
-6) Make it sound like breaking news or important update
-7) Keep the language natural and viral-worthy
-8) Do not add URLs or links
-9) Do not mention that it's enhanced by AI
-10) Focus on the key message only
-
-Return ONLY the enhanced caption without any explanations, quotes, or additional text.
-""".strip()
-
-        if twitter_link:
-            prompt += f"\n\nOriginal Twitter link: {twitter_link}"
-
+        ENHANCE THIS TWITTER CAPTION: "{original_text}"
+        
+        Make it more engaging, viral, and news-style. Follow these rules:
+        
+        1. Keep it short (1-2 lines max)
+        2. Make it attention-grabbing
+        3. Use 1-2 relevant emojis if appropriate
+        4. Add 1-2 relevant hashtags
+        5. Keep the original meaning
+        6. Make it sound like breaking news
+        7. No URLs or links
+        8. No AI mentions
+        
+        Return ONLY the enhanced caption, nothing else.
+        """
+        
         return prompt
 
-    async def _call_perplexity_api(self, prompt: str, model: str) -> Optional[str]:
+    async def _call_perplexity_api(self, prompt, model):
         """
-        Make API call to Perplexity AI and clean the response.
-        Raises exceptions for transport errors; returns None for handled API errors.
+        Make API call to Perplexity AI
         """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-
+        
         payload = {
             "model": model,
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "You are a social media expert who enhances captions to make them more engaging, "
-                        "viral, and news-style while maintaining original meaning. Always return only the "
-                        "enhanced caption without any additional text."
-                    )
+                    "content": "You enhance social media captions to be more engaging and viral. Always return only the enhanced caption without any explanations."
                 },
-                {"role": "user", "content": prompt}
+                {
+                    "role": "user",
+                    "content": prompt
+                }
             ],
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-            "top_p": self.top_p
+            "max_tokens": 100,
+            "temperature": 0.8,
+            "top_p": 0.9
         }
-
+        
         try:
-            timeout = aiohttp.ClientTimeout(total=self.request_timeout)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(self.base_url, headers=headers, json=payload) as response:
-                    text_body = await self._safe_read_text(response)
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.base_url, headers=headers, json=payload, timeout=30) as response:
                     if response.status == 200:
-                        try:
-                            data = json.loads(text_body)
-                            content = data["choices"][0]["message"]["content"]
-                            content = self._clean_ai_response(content)
-                            return content
-                        except Exception as parse_err:
-                            logger.error(f"Parse error for model {model}: {parse_err} | body: {text_body[:500]}")
-                            return None
+                        data = await response.json()
+                        content = data['choices'][0]['message']['content'].strip()
+                        
+                        # Clean the response
+                        content = self._clean_ai_response(content)
+                        return content
+                        
                     else:
-                        # Handle common error scenarios
-                        logger.error(f"Perplexity API error ({response.status}) with model {model}: {text_body}")
-
-                        # Immediate switch if invalid model
-                        if "invalid_model" in text_body.lower():
-                            raise ValueError(f"Invalid model: {model}")
-
-                        # Basic rate limit/backoff hint — let caller decide next step
-                        if response.status in (429, 503):
-                            await asyncio.sleep(0.5)
-
+                        error_text = await response.text()
+                        logger.error(f"Perplexity API error ({response.status}) with model {model}: {error_text}")
+                        
+                        # If model not found error, try next model immediately
+                        if "invalid_model" in error_text or "not found" in error_text:
+                            raise Exception(f"Invalid model: {model}")
+                            
                         return None
-
+                        
         except aiohttp.ClientError as e:
             logger.error(f"Perplexity API request failed for model {model}: {str(e)}")
-            # Let caller try next model
-            return None
-        except asyncio.TimeoutError:
-            logger.error(f"Perplexity API request timed out for model {model}")
             return None
         except Exception as e:
             logger.error(f"Unexpected error in Perplexity API call for model {model}: {str(e)}")
             return None
 
-    async def _safe_read_text(self, response: aiohttp.ClientResponse) -> str:
+    def _clean_ai_response(self, text):
         """
-        Safely read response body as text; avoid unhandled exceptions in error paths.
-        """
-        try:
-            return await response.text()
-        except Exception:
-            return ""
-
-    def _clean_ai_response(self, text: Optional[str]) -> str:
-        """
-        Clean AI response from unwanted formatting:
-        - Remove quotes/prefixes
-        - Remove basic markdown bold/italic
-        - Trim spaces and ensure single-line or short lines
+        Clean AI response from unwanted formatting
         """
         if not text:
-            return ""
-
-        cleaned = text.strip().strip('"\'`')
-
-        # Remove common AI prefixes (case-insensitive)
+            return text
+            
+        # Remove quotes if present
+        text = text.strip('"\'')
+        
+        # Remove common AI prefixes
         prefixes_to_remove = [
-            "enhanced caption:",
-            "here's the enhanced caption:",
-            "caption:",
-            "enhanced:",
-            "news-style caption:"
+            "Enhanced caption:",
+            "Here's the enhanced caption:",
+            "Caption:",
+            "Enhanced:",
+            "News-style caption:",
+            "Here is the enhanced caption:",
+            "Viral caption:"
         ]
-        low = cleaned.lower()
+        
         for prefix in prefixes_to_remove:
-            if low.startswith(prefix):
-                cleaned = cleaned[len(prefix):].strip()
-                break  # remove only first matching prefix
+            if text.lower().startswith(prefix.lower()):
+                text = text[len(prefix):].strip()
+                
+        # Remove any markdown formatting
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # Remove bold
+        text = re.sub(r'\*(.*?)\*', r'\1', text)      # Remove italic
+        
+        return text.strip()
 
-        # Remove markdown bold/italic safely
-        # Bold: **text** -> text
-        cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
-        # Italic: *text* or _text_ -> text
-        cleaned = re.sub(r"\*(.*?)\*", r"\1", cleaned)
-        cleaned = re.sub(r"_(.*?)_", r"\1", cleaned)
-
-        # Strip extraneous quotes again
-        cleaned = cleaned.strip().strip('"\'`')
-
-        # Enforce 1-2 line max (hard trim extra newlines)
-        lines = [ln.strip() for ln in cleaned.splitlines() if ln.strip()]
-        if len(lines) > 2:
-            lines = lines[:2]
-        cleaned = " ".join(lines) if len(lines) <= 1 else "\n".join(lines)
-
-        return cleaned.strip()
-
-    def is_meaningful_text(self, text: Optional[str]) -> bool:
+    def is_meaningful_text(self, text):
         """
-        Check if text is meaningful enough to enhance:
-        - At least 3 words and >= 15 non-URL chars after cleaning.
+        Check if text is meaningful enough to enhance
         """
         if not text:
             return False
-
-        # Remove URLs
-        clean_text = re.sub(r"http\S+", "", text)
-        # Remove special characters except spaces and alphanumerics
-        clean_text = re.sub(r"[^\w\s#@]", "", clean_text, flags=re.UNICODE)
-
+            
+        # Remove URLs and special characters for length check
+        clean_text = re.sub(r'http\S+', '', text)
+        clean_text = re.sub(r'[^\w\s]', '', clean_text)
+        
+        # Check if we have substantial text
         words = clean_text.strip().split()
         return len(words) >= 3 and len(clean_text.strip()) >= 15
 
-    def _is_valid_output(self, text: Optional[str]) -> bool:
+    async def test_connection(self):
         """
-        Validate output length and ensure it isn't boilerplate.
-        """
-        if not text:
-            return False
-        t = text.strip()
-        if len(t) < 20:
-            return False
-        # Reject if it contains obvious instruction echoes
-        bad_patterns = [
-            r"return only the enhanced caption",
-            r"do not add urls",
-            r"do not mention that it's enhanced by ai",
-        ]
-        for bp in bad_patterns:
-            if re.search(bp, t, re.IGNORECASE):
-                return False
-        return True
-
-    async def test_connection(self) -> Tuple[bool, str]:
-        """
-        Test API connection and available models (quick ping).
-        Returns (status, message)
+        Test API connection and available models
         """
         if not self.api_key:
             return False, "No API key provided"
-
-        test_prompt = "Respond with only: OK"
-
+            
+        test_prompt = "Hello, please respond with 'OK' if you can see this message."
+        
+        working_models = []
+        
         for model in self.available_models:
             try:
                 headers = {
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json"
                 }
-
+                
                 payload = {
                     "model": model,
                     "messages": [{"role": "user", "content": test_prompt}],
-                    "max_tokens": 5
+                    "max_tokens": 10
                 }
-
-                timeout = aiohttp.ClientTimeout(total=10)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(self.base_url, headers=headers, json=payload) as response:
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(self.base_url, headers=headers, json=payload, timeout=10) as response:
                         if response.status == 200:
-                            body = await self._safe_read_text(response)
-                            try:
-                                data = json.loads(body)
-                                content = data["choices"][0]["message"]["content"].strip()
-                                if content.upper() == "OK":
-                                    return True, f"Model {model} is working"
-                            except Exception:
-                                pass
-                        # continue to next model
-            except Exception:
+                            working_models.append(model)
+                            
+            except Exception as e:
                 continue
+                
+        if working_models:
+            return True, f"Working models: {', '.join(working_models[:2])}"
+        else:
+            return False, "No working models found. Check API key and models."import logging
+import aiohttp
+import json
+import re
+from config import PERPLEXITY_API_KEY
 
-        return False, "No working models found"
+logger = logging.getLogger(__name__)
+
+class AICaptionEnhancer:
+    def __init__(self):
+        self.api_key = PERPLEXITY_API_KEY
+        self.base_url = "https://api.perplexity.ai/chat/completions"
+        self.available_models = [
+            "llama-3.1-sonar-small-128k-online",
+            "llama-3.1-sonar-large-128k-online", 
+            "sonar-small-online",
+            "sonar-medium-online",
+            "sonar-large-online",
+            "llama-3.1-8b-instruct",
+            "llama-3.1-70b-instruct"
+        ]
+        self.current_model_index = 0
+        
+    async def enhance_caption(self, original_text, twitter_link=None):
+        """
+        Enhance caption using Perplexity AI to make it more engaging and news-style
+        """
+        if not self.api_key:
+            logger.warning("Perplexity API key not found. Returning original caption.")
+            return original_text
+            
+        if not original_text or len(original_text.strip()) < 10:
+            return original_text
+
+        # Try all available models
+        for attempt in range(len(self.available_models)):
+            try:
+                model = self.available_models[self.current_model_index]
+                logger.info(f"Trying AI model: {model}")
+                
+                prompt = self._create_enhancement_prompt(original_text, twitter_link)
+                enhanced_text = await self._call_perplexity_api(prompt, model)
+                
+                if enhanced_text and len(enhanced_text.strip()) > 20:
+                    logger.info(f"Successfully enhanced caption using {model}")
+                    return enhanced_text.strip()
+                else:
+                    logger.warning(f"AI returned empty response with model {model}")
+                    
+            except Exception as e:
+                logger.error(f"Error with model {self.available_models[self.current_model_index]}: {str(e)}")
+            
+            # Try next model
+            self.current_model_index = (self.current_model_index + 1) % len(self.available_models)
+            
+            # Don't wait between attempts for the same request
+            if attempt < len(self.available_models) - 1:
+                logger.info(f"Trying next model...")
+
+        logger.error("All AI models failed, returning original caption")
+        return original_text
+
+    def _create_enhancement_prompt(self, original_text, twitter_link=None):
+        """
+        Create prompt for AI enhancement
+        """
+        prompt = f"""
+        ENHANCE THIS TWITTER CAPTION: "{original_text}"
+        
+        Make it more engaging, viral, and news-style. Follow these rules:
+        
+        1. Keep it short (1-2 lines max)
+        2. Make it attention-grabbing
+        3. Use 1-2 relevant emojis if appropriate
+        4. Add 1-2 relevant hashtags
+        5. Keep the original meaning
+        6. Make it sound like breaking news
+        7. No URLs or links
+        8. No AI mentions
+        
+        Return ONLY the enhanced caption, nothing else.
+        """
+        
+        return prompt
+
+    async def _call_perplexity_api(self, prompt, model):
+        """
+        Make API call to Perplexity AI
+        """
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You enhance social media captions to be more engaging and viral. Always return only the enhanced caption without any explanations."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "max_tokens": 100,
+            "temperature": 0.8,
+            "top_p": 0.9
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.base_url, headers=headers, json=payload, timeout=30) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        content = data['choices'][0]['message']['content'].strip()
+                        
+                        # Clean the response
+                        content = self._clean_ai_response(content)
+                        return content
+                        
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Perplexity API error ({response.status}) with model {model}: {error_text}")
+                        
+                        # If model not found error, try next model immediately
+                        if "invalid_model" in error_text or "not found" in error_text:
+                            raise Exception(f"Invalid model: {model}")
+                            
+                        return None
+                        
+        except aiohttp.ClientError as e:
+            logger.error(f"Perplexity API request failed for model {model}: {str(e)}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in Perplexity API call for model {model}: {str(e)}")
+            return None
+
+    def _clean_ai_response(self, text):
+        """
+        Clean AI response from unwanted formatting
+        """
+        if not text:
+            return text
+            
+        # Remove quotes if present
+        text = text.strip('"\'')
+        
+        # Remove common AI prefixes
+        prefixes_to_remove = [
+            "Enhanced caption:",
+            "Here's the enhanced caption:",
+            "Caption:",
+            "Enhanced:",
+            "News-style caption:",
+            "Here is the enhanced caption:",
+            "Viral caption:"
+        ]
+        
+        for prefix in prefixes_to_remove:
+            if text.lower().startswith(prefix.lower()):
+                text = text[len(prefix):].strip()
+                
+        # Remove any markdown formatting
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # Remove bold
+        text = re.sub(r'\*(.*?)\*', r'\1', text)      # Remove italic
+        
+        return text.strip()
+
+    def is_meaningful_text(self, text):
+        """
+        Check if text is meaningful enough to enhance
+        """
+        if not text:
+            return False
+            
+        # Remove URLs and special characters for length check
+        clean_text = re.sub(r'http\S+', '', text)
+        clean_text = re.sub(r'[^\w\s]', '', clean_text)
+        
+        # Check if we have substantial text
+        words = clean_text.strip().split()
+        return len(words) >= 3 and len(clean_text.strip()) >= 15
+
+    async def test_connection(self):
+        """
+        Test API connection and available models
+        """
+        if not self.api_key:
+            return False, "No API key provided"
+            
+        test_prompt = "Hello, please respond with 'OK' if you can see this message."
+        
+        working_models = []
+        
+        for model in self.available_models:
+            try:
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                payload = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": test_prompt}],
+                    "max_tokens": 10
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(self.base_url, headers=headers, json=payload, timeout=10) as response:
+                        if response.status == 200:
+                            working_models.append(model)
+                            
+            except Exception as e:
+                continue
+                
+        if working_models:
+            return True, f"Working models: {', '.join(working_models[:2])}"
+        else:
+            return False, "No working models found. Check API key and models."
