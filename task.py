@@ -10,8 +10,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timedelta
 import re
-from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, TIMEZONE, ADMIN_IDS, PERPLEXITY_API_KEY
-from aitxt import AICaptionEnhancer
+from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, TIMEZONE, ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -29,15 +28,13 @@ class TwitterBot:
         self.scheduled_messages = []
         self.last_processed_message_id = None
         self.incremental_schedule_mode = False
-        self.fixed_interval_mode = False
+        self.fixed_interval_mode = False  # New mode for task3
         self.quality_selection_timeout = 60
         self._shutdown_flag = False
         self.http_app = None
         self.runner = None
         self.site = None
         self.polling_task = None
-        self.ai_enhancer = AICaptionEnhancer()
-        self.original_twitter_link = None
 
     def is_admin(self, user_id):
         """Check if user is admin"""
@@ -68,6 +65,7 @@ class TwitterBot:
         runner = web.AppRunner(self.http_app)
         await runner.setup()
         
+        # Koyeb के लिए PORT environment variable use करें
         port = int(os.environ.get('PORT', 8000))
         site = web.TCPSite(runner, '0.0.0.0', port)
         await site.start()
@@ -168,51 +166,12 @@ class TwitterBot:
             logger.error(f"Error in handle_twittervid_message: {str(e)}")
 
     async def _process_received_video(self, event):
-        """Process received video and send to channel with AI-enhanced caption"""
+        """Process received video and send to channel"""
         try:
-            original_caption = self.clean_text(event.message.text) if event.message.text else ""
-            
-            # Enhance caption with AI if meaningful text exists
-            final_caption = original_caption
-            ai_enhanced = False
-            
-            if self.ai_enhancer.is_meaningful_text(original_caption) and PERPLEXITY_API_KEY:
-                try:
-                    if self.current_update and self.current_update.message:
-                        await self.current_update.message.reply_text(
-                            "🤖 Enhancing caption with AI..."
-                        )
-                    
-                    # Add timeout for AI enhancement
-                    enhanced_caption = await asyncio.wait_for(
-                        self.ai_enhancer.enhance_caption(original_caption, self.original_twitter_link),
-                        timeout=15.0
-                    )
-                    
-                    if enhanced_caption and enhanced_caption != original_caption:
-                        final_caption = enhanced_caption
-                        ai_enhanced = True
-                        logger.info("Caption successfully enhanced with AI")
-                    else:
-                        logger.info("Using original caption (AI enhancement not available)")
-                        
-                except asyncio.TimeoutError:
-                    logger.warning("AI enhancement timeout, using original caption")
-                    final_caption = original_caption
-                except Exception as e:
-                    logger.error(f"AI enhancement failed, using original caption: {str(e)}")
-                    final_caption = original_caption
-            else:
-                if not PERPLEXITY_API_KEY:
-                    logger.info("AI enhancement disabled - no API key")
-                else:
-                    logger.info("Caption too short for AI enhancement, using original")
+            caption = self.clean_text(event.message.text) if event.message.text else ""
 
-            if final_caption:
-                formatted_caption = f"\n\n{final_caption}\n\n"
-                # Add AI attribution if caption was enhanced
-                if ai_enhanced:
-                    formatted_caption += "✨ #AIEnhanced\n"
+            if caption:
+                formatted_caption = f"\n\n{caption}\n\n"
             else:
                 formatted_caption = ""
 
@@ -237,10 +196,8 @@ class TwitterBot:
                 self.scheduled_messages.append(message.id)
 
                 if self.current_update and self.current_update.message:
-                    enhancement_status = "Enhanced 🤖" if ai_enhanced else "Original"
                     await self.current_update.message.reply_text(
-                        f"✅ Video successfully scheduled for {scheduled_time.strftime('%Y-%m-%d %H:%M')} IST!\n"
-                        f"📝 Caption: {enhancement_status}"
+                        f"✅ Video successfully scheduled for {scheduled_time.strftime('%Y-%m-%d %H:%M')} IST!"
                     )
             else:
                 if event.message.media:
@@ -256,10 +213,8 @@ class TwitterBot:
                     )
 
                 if self.current_update and self.current_update.message:
-                    enhancement_status = "Enhanced 🤖" if ai_enhanced else "Original"
                     await self.current_update.message.reply_text(
-                        f"✅ Video successfully sent to your channel!\n"
-                        f"📝 Caption: {enhancement_status}"
+                        "✅ Video successfully sent to your channel!"
                     )
 
             logger.info(f"Message sent to channel {YOUR_CHANNEL_ID}")
@@ -279,16 +234,21 @@ class TwitterBot:
         now = datetime.now(TIMEZONE)
 
         if self.scheduled_mode:
+            # Original task mode - daily at 7 AM with 1 hour intervals
             scheduled_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
             if scheduled_time < now:
                 scheduled_time += timedelta(days=1)
             scheduled_time += timedelta(hours=self.scheduled_counter)
         elif self.incremental_schedule_mode:
+            # Task2 mode - incremental scheduling
             scheduled_time = now + timedelta(hours=self.scheduled_counter + 2)
         elif self.fixed_interval_mode:
+            # Task3 mode - fixed 2 hour interval starting from 7 AM
+            # Calculate next 7 AM
             scheduled_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
             if scheduled_time < now:
                 scheduled_time += timedelta(days=1)
+            # Add 2 hours for each subsequent post
             scheduled_time += timedelta(hours=2 * self.scheduled_counter)
         else:
             scheduled_time = now
@@ -301,7 +261,6 @@ class TwitterBot:
         self.waiting_for_video = False
         self.current_update = None
         self.quality_selected = False
-        self.original_twitter_link = None
 
     def clean_text(self, text):
         """Remove last 3 lines and clean text"""
@@ -321,26 +280,12 @@ class TwitterBot:
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start command handler"""
+        # Admin check
         if not await self.admin_only(update, context):
             return
 
-        # Test AI connection if API key is available
-        ai_status = "🤖 **AI Caption Enhancement: ENABLED**"
-        if PERPLEXITY_API_KEY:
-            try:
-                working, message = await self.ai_enhancer.test_connection()
-                if working:
-                    ai_status = f"🤖 **AI Caption Enhancement: ENABLED** ✅\n   - {message}"
-                else:
-                    ai_status = f"🤖 **AI Caption Enhancement: DISABLED** ❌\n   - {message}"
-            except Exception as e:
-                ai_status = f"🤖 **AI Caption Enhancement: ERROR** ⚠️\n   - Connection test failed"
-        else:
-            ai_status = "🤖 **AI Caption Enhancement: DISABLED** ❌\n   - No API key provided"
-
         await update.message.reply_text(
             "🤖 **Twitter Video Bot Started!**\n\n"
-            f"{ai_status}\n\n"
             "📤 **Send any Twitter/X link to download and forward videos.**\n\n"
             "📋 **Available Commands:**\n"
             "• /task - Schedule posts daily at 7 AM with 1-hour intervals\n"
@@ -352,6 +297,7 @@ class TwitterBot:
 
     async def start_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start scheduled posting mode"""
+        # Admin check
         if not await self.admin_only(update, context):
             return
 
@@ -375,6 +321,7 @@ class TwitterBot:
 
     async def start_task2(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start incremental scheduled posting mode"""
+        # Admin check
         if not await self.admin_only(update, context):
             return
 
@@ -396,6 +343,7 @@ class TwitterBot:
 
     async def start_task3(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start fixed 2-hour interval scheduling mode starting from 7 AM"""
+        # Admin check
         if not await self.admin_only(update, context):
             return
 
@@ -405,6 +353,7 @@ class TwitterBot:
         self.scheduled_counter = 0
         self.scheduled_messages = []
 
+        # Calculate schedule times
         now = datetime.now(TIMEZONE)
         first_schedule_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
         if first_schedule_time < now:
@@ -426,6 +375,7 @@ class TwitterBot:
 
     async def end_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """End scheduled posting mode"""
+        # Admin check
         if not await self.admin_only(update, context):
             return
 
@@ -446,6 +396,7 @@ class TwitterBot:
     async def process_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Process Twitter links"""
         try:
+            # Admin check
             if not await self.admin_only(update, context):
                 return
 
@@ -464,9 +415,6 @@ class TwitterBot:
                 )
                 return
 
-            # Store original link for AI enhancement
-            self.original_twitter_link = text
-            
             text = self.clean_text(text)
 
             self.current_update = update
@@ -505,9 +453,11 @@ class TwitterBot:
     async def start_polling(self):
         """Start bot polling in a separate task"""
         try:
+            # Bot application start करें
             logger.info("Starting Telegram Bot...")
             self.bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
+            # Add handlers
             self.bot_app.add_handler(CommandHandler("start", self.start_command))
             self.bot_app.add_handler(CommandHandler("task", self.start_task))
             self.bot_app.add_handler(CommandHandler("task2", self.start_task2))
@@ -517,10 +467,12 @@ class TwitterBot:
 
             logger.info("Bot started successfully! Waiting for messages...")
             
+            # Bot polling start करें
             await self.bot_app.initialize()
             await self.bot_app.start()
             await self.bot_app.updater.start_polling()
             
+            # Keep the polling running
             while not self._shutdown_flag:
                 await asyncio.sleep(1)
                 
@@ -561,12 +513,15 @@ class TwitterBot:
     async def run_async(self):
         """Async main function"""
         try:
+            # HTTP server start करें
             logger.info("Starting HTTP server for health checks...")
             self.runner, self.site = await self.start_http_server()
             
+            # UserBot initialize करें
             logger.info("Initializing UserBot...")
             await self.initialize_userbot()
             
+            # Start polling in the current event loop
             await self.start_polling()
             
         except Exception as e:
@@ -580,6 +535,7 @@ class TwitterBot:
         
         while retry_count < max_retries and not self._shutdown_flag:
             try:
+                # Create new event loop for each attempt
                 self.loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(self.loop)
                 
