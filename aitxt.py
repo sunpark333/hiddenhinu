@@ -2,7 +2,6 @@ import logging
 import aiohttp
 import json
 import re
-import requests
 from config import PERPLEXITY_API_KEY
 
 logger = logging.getLogger(__name__)
@@ -57,7 +56,7 @@ class AICaptionEnhancer:
 
     async def _call_perplexity_api(self, prompt):
         """
-        Make API call to Perplexity AI using the working model from group.py
+        Make API call to Perplexity AI using the working "sonar" model
         """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -151,7 +150,7 @@ class AICaptionEnhancer:
 
     async def test_connection(self):
         """
-        Test API connection using the working model
+        Test API connection using the working "sonar" model
         """
         if not self.api_key:
             return False, "No API key provided"
@@ -178,76 +177,3 @@ class AICaptionEnhancer:
                         
         except Exception as e:
             return False, f"Connection failed: {str(e)}"
-
-    def generate_quiz_with_perplexity(self, subject: str, difficulty: str, num_questions: int = 20):
-        """
-        Generate quiz questions using Perplexity AI API - same as in group.py
-        """
-        try:
-            # Perplexity API endpoint
-            url = "https://api.perplexity.ai/chat/completions"
-            
-            # Prepare the prompt
-            prompt = f"""
-            Create a {num_questions}-question multiple choice quiz on {subject} for 12th grade Commerce students.
-            Difficulty level: {difficulty}.
-            For each question, provide:
-            1. The question text
-            2. Four options (labeled a, b, c, d)
-            3. The correct answer (0-indexed, e.g., 0 for first option)
-            4. A brief explanation of the correct answer
-            
-            Return the response as a JSON array with the following structure:
-            [
-              {{
-                "question": "question text",
-                "options": ["option1", "option2", "option3", "option4"],
-                "correct_answer": 0,
-                "explanation": "brief explanation"
-              }}
-            ]
-            """
-            
-            # Headers for the API request
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            # Payload for the API request
-            payload = {
-                "model": "sonar",
-                "messages": [
-                    {"role": "system", "content": "You are a helpful educational assistant that creates quiz questions for 12th grade Commerce students."},
-                    {"role": "user", "content": prompt}
-                ],
-                "max_tokens": 4000,
-                "temperature": 0.7
-            }
-            
-            # Make the API request
-            response = requests.post(url, headers=headers, json=payload)
-            
-            if response.status_code == 200:
-                # Parse the response
-                response_data = response.json()
-                content = response_data['choices'][0]['message']['content']
-                
-                # Extract JSON from the response
-                try:
-                    # Try to find JSON array in the response
-                    start_idx = content.find('[')
-                    end_idx = content.rfind(']') + 1
-                    json_str = content[start_idx:end_idx]
-                    quiz_data = json.loads(json_str)
-                    return quiz_data
-                except (json.JSONDecodeError, KeyError, IndexError):
-                    logger.error("Failed to parse JSON from Perplexity response")
-                    return None
-            else:
-                logger.error(f"Perplexity API error: {response.status_code} - {response.text}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error generating quiz with Perplexity: {e}")
-            return None
