@@ -24,7 +24,6 @@ class TwitterBot:
     def __init__(self):
         self.userbot = None
         self.bot_app = None
-        self.loop = asyncio.new_event_loop()
         self.waiting_for_video = False
         self.current_update = None
         self.quality_selected = False
@@ -35,6 +34,7 @@ class TwitterBot:
         self.last_processed_message_id = None
         self.incremental_schedule_mode = False
         self.quality_selection_timeout = 60  # Increased timeout
+        self.is_running = False
 
     async def initialize_userbot(self):
         """Initialize Telegram userbot with string session in memory"""
@@ -46,7 +46,6 @@ class TwitterBot:
                 session=session,
                 api_id=int(API_ID),
                 api_hash=API_HASH,
-                loop=self.loop
             )
             
             await self.userbot.start()
@@ -346,14 +345,14 @@ class TwitterBot:
             "/endtask - Stop scheduling"
         )
 
-    def run(self):
-        """Main function to run the bot"""
-        asyncio.set_event_loop(self.loop)
-        
+    async def run_async(self):
+        """Main async function to run the bot"""
         try:
+            self.is_running = True
+            
             # First userbot initialize karein
             logger.info("Initializing UserBot...")
-            self.loop.run_until_complete(self.initialize_userbot())
+            await self.initialize_userbot()
             
             # Phir bot app start karein
             logger.info("Starting Telegram Bot...")
@@ -367,24 +366,54 @@ class TwitterBot:
             self.bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_link))
             
             logger.info("Bot started successfully! Waiting for messages...")
-            self.loop.run_until_complete(self.bot_app.run_polling())
+            await self.bot_app.run_polling()
             
         except Exception as e:
             logger.error(f"Critical error: {str(e)}")
-            # Retry after delay
-            asyncio.sleep(10)
-            self.run()
+            # Don't retry recursively, just shutdown
+            await self.shutdown()
         finally:
-            self.loop.run_until_complete(self.shutdown())
-            self.loop.close()
+            await self.shutdown()
+
+    def run(self):
+        """Main function to run the bot"""
+        try:
+            # Create new event loop and run
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.run_async())
+        except KeyboardInterrupt:
+            logger.info("Bot stopped by user")
+        except Exception as e:
+            logger.error(f"Fatal error: {str(e)}")
+        finally:
+            if not self.bot_app:
+                # If bot_app wasn't created, we still need to shutdown
+                loop.run_until_complete(self.shutdown())
 
     async def shutdown(self):
-        """Shutdown all services"""
+        """Shutdown all services properly"""
+        if not self.is_running:
+            return
+            
+        self.is_running = False
         logger.info("Shutting down services...")
-        if self.bot_app:
-            await self.bot_app.shutdown()
-        if self.userbot and self.userbot.is_connected():
-            await self.userbot.disconnect()
+        
+        try:
+            if self.bot_app:
+                await self.bot_app.shutdown()
+                await self.bot_app.updater.stop()
+                logger.info("Bot app shut down")
+        except Exception as e:
+            logger.error(f"Error shutting down bot app: {str(e)}")
+        
+        try:
+            if self.userbot and self.userbot.is_connected():
+                await self.userbot.disconnect()
+                logger.info("UserBot disconnected")
+        except Exception as e:
+            logger.error(f"Error disconnecting userbot: {str(e)}")
+        
         logger.info("All services safely shut down")
 
 if __name__ == '__main__':
