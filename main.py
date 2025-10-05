@@ -7,10 +7,22 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timedelta
 import re
-from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, PHONE_NUMBER, TWITTER_VID_BOT, YOUR_CHANNEL_ID, TIMEZONE
 
-# Set timezone
-TIMEZONE = pytz.timezone(TIMEZONE)
+# Load environment variables
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+# Bot configuration settings
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+API_ID = os.getenv('API_ID')
+API_HASH = os.getenv('API_HASH')
+PHONE_NUMBER = os.getenv('PHONE_NUMBER')
+TWITTER_VID_BOT = os.getenv('TWITTER_VID_BOT', 'twittervid_bot')
+YOUR_CHANNEL_ID = int(os.getenv('YOUR_CHANNEL_ID', '-1001737011271'))
+TIMEZONE = pytz.timezone(os.getenv('TIMEZONE', 'Asia/Kolkata'))
 
 # Logging setup
 logging.basicConfig(
@@ -33,24 +45,21 @@ class TwitterBot:
         self.scheduled_messages = []
         self.last_processed_message_id = None
         self.incremental_schedule_mode = False
-        self.quality_selection_timeout = 30  # seconds to wait for quality selection
+        self.quality_selection_timeout = 30
 
     def clean_text(self, text):
         """Remove last 3 lines and clean text"""
         if not text:
             return text
             
-        # Split into lines and remove last 3 lines
         lines = text.split('\n')
         if len(lines) > 3:
             lines = lines[:-3]
         cleaned_text = '\n'.join(lines)
         
-        # Remove hidden links if any
         hidden_link_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
         cleaned_text = re.sub(hidden_link_pattern, r'\1', cleaned_text)
         
-        # Remove banned text pattern
         cleaned_text = cleaned_text.replace('📲 @twittervid_bot', '').strip()
         
         return cleaned_text
@@ -61,7 +70,7 @@ class TwitterBot:
 
     async def initialize_userbot(self):
         """Initialize Telegram userbot"""
-        self.userbot = TelegramClient('userbot_session', API_ID, API_HASH, loop=self.loop)
+        self.userbot = TelegramClient('userbot_session', int(API_ID), API_HASH, loop=self.loop)
         await self.userbot.start(PHONE_NUMBER)
         
         @self.userbot.on(events.NewMessage(from_users=TWITTER_VID_BOT))
@@ -73,13 +82,12 @@ class TwitterBot:
                 self.last_processed_message_id = event.message.id
                 
                 if self.waiting_for_video and self.current_update:
-                    await asyncio.sleep(1)  # Small delay for stability
+                    await asyncio.sleep(1)
                     
-                    # Handle quality selection
                     if "Select Video Quality" in event.message.text and not self.quality_selected:
                         buttons = await event.message.get_buttons()
                         if buttons and len(buttons) > 1 and len(buttons[1]) > 0:
-                            await buttons[1][0].click()  # Select the first button of the second row (usually HD quality)
+                            await buttons[1][0].click()
                             quality = buttons[1][0].text
                             if self.current_update and self.current_update.message:
                                 await self.current_update.message.reply_text(
@@ -88,13 +96,9 @@ class TwitterBot:
                             self.quality_selected = True
                             return
                     
-                    # Handle received video/media
                     if (event.message.media or event.message.text) and self.quality_selected:
                         try:
-                            # Clean the caption/text
                             caption = self.clean_text(event.message.text) if event.message.text else ""
-                            
-                            # Add dividers at start and end
                             divider = self.generate_divider()
                             if caption:
                                 caption = f"{divider}\n\n{caption}\n\n{divider}"
@@ -109,7 +113,7 @@ class TwitterBot:
                                     if scheduled_time < now:
                                         scheduled_time += timedelta(days=1)
                                     scheduled_time += timedelta(hours=self.scheduled_counter)
-                                else:  # incremental_schedule_mode
+                                else:
                                     scheduled_time = now + timedelta(hours=self.scheduled_counter + 2)
                                 
                                 if event.message.media:
@@ -237,7 +241,6 @@ class TwitterBot:
             message = update.message
             text = message.text
             
-            # Clean the text (removes last 3 lines and other unwanted content)
             text = self.clean_text(text)
             
             if not text:
@@ -251,11 +254,9 @@ class TwitterBot:
             
             await message.reply_text("⏳ Processing link and downloading video...")
             
-            # Send the link to twittervid_bot
             await self.userbot.send_message(TWITTER_VID_BOT, text)
             logger.info(f"Link sent: {text}")
             
-            # Wait for quality selection response
             start_time = datetime.now()
             while not self.quality_selected:
                 await asyncio.sleep(1)
