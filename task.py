@@ -176,16 +176,17 @@ class TwitterBot:
             final_caption = original_caption
             ai_enhanced = False
             
-            if self.ai_enhancer.is_meaningful_text(original_caption):
+            if self.ai_enhancer.is_meaningful_text(original_caption) and PERPLEXITY_API_KEY:
                 try:
                     if self.current_update and self.current_update.message:
                         await self.current_update.message.reply_text(
                             "🤖 Enhancing caption with AI..."
                         )
                     
-                    enhanced_caption = await self.ai_enhancer.enhance_caption(
-                        original_caption, 
-                        self.original_twitter_link
+                    # Add timeout for AI enhancement
+                    enhanced_caption = await asyncio.wait_for(
+                        self.ai_enhancer.enhance_caption(original_caption, self.original_twitter_link),
+                        timeout=15.0
                     )
                     
                     if enhanced_caption and enhanced_caption != original_caption:
@@ -195,11 +196,17 @@ class TwitterBot:
                     else:
                         logger.info("Using original caption (AI enhancement not available)")
                         
+                except asyncio.TimeoutError:
+                    logger.warning("AI enhancement timeout, using original caption")
+                    final_caption = original_caption
                 except Exception as e:
                     logger.error(f"AI enhancement failed, using original caption: {str(e)}")
                     final_caption = original_caption
             else:
-                logger.info("Caption too short for AI enhancement, using original")
+                if not PERPLEXITY_API_KEY:
+                    logger.info("AI enhancement disabled - no API key")
+                else:
+                    logger.info("Caption too short for AI enhancement, using original")
 
             if final_caption:
                 formatted_caption = f"\n\n{final_caption}\n\n"
@@ -317,7 +324,19 @@ class TwitterBot:
         if not await self.admin_only(update, context):
             return
 
-        ai_status = "🤖 **AI Caption Enhancement: ENABLED**" if PERPLEXITY_API_KEY else "🤖 **AI Caption Enhancement: DISABLED**"
+        # Test AI connection if API key is available
+        ai_status = "🤖 **AI Caption Enhancement: ENABLED**"
+        if PERPLEXITY_API_KEY:
+            try:
+                working, message = await self.ai_enhancer.test_connection()
+                if working:
+                    ai_status = f"🤖 **AI Caption Enhancement: ENABLED** ✅\n   - {message}"
+                else:
+                    ai_status = f"🤖 **AI Caption Enhancement: DISABLED** ❌\n   - {message}"
+            except Exception as e:
+                ai_status = f"🤖 **AI Caption Enhancement: ERROR** ⚠️\n   - Connection test failed"
+        else:
+            ai_status = "🤖 **AI Caption Enhancement: DISABLED** ❌\n   - No API key provided"
 
         await update.message.reply_text(
             "🤖 **Twitter Video Bot Started!**\n\n"
