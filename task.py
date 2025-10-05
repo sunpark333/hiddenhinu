@@ -10,9 +10,153 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timedelta
 import re
-from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, TIMEZONE, ADMIN_IDS
+from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, TIMEZONE, ADMIN_IDS, PERPLEXITY_API_KEY
 
 logger = logging.getLogger(__name__)
+
+class TextEnhancer:
+    def __init__(self):
+        self.api_key = PERPLEXITY_API_KEY
+        self.base_url = "https://api.perplexity.ai/chat/completions"
+        
+    async def enhance_caption(self, original_text, tweet_url=None):
+        """
+        Enhance caption using Perplexity AI to make it more engaging and news-like
+        
+        Args:
+            original_text (str): Original caption text from tweet
+            tweet_url (str): Twitter URL for context (optional)
+            
+        Returns:
+            str: Enhanced caption or original if enhancement fails
+        """
+        if not self.api_key or self.api_key == "YOUR_PERPLEXITY_API_KEY":
+            logger.warning("Perplexity API key not configured. Returning original text.")
+            return original_text
+            
+        if not original_text or len(original_text.strip()) < 10:
+            return original_text
+            
+        try:
+            # Prepare the prompt for enhancement
+            prompt = self._create_enhancement_prompt(original_text, tweet_url)
+            
+            # Call Perplexity API
+            enhanced_text = await self._call_perplexity_api(prompt)
+            
+            if enhanced_text and len(enhanced_text.strip()) > 20:
+                logger.info("Caption successfully enhanced using Perplexity AI")
+                return enhanced_text
+            else:
+                logger.warning("Enhanced text too short, returning original")
+                return original_text
+                
+        except Exception as e:
+            logger.error(f"Error enhancing caption: {str(e)}")
+            return original_text
+            
+    def _create_enhancement_prompt(self, original_text, tweet_url=None):
+        """Create enhancement prompt for Perplexity AI"""
+        
+        base_prompt = f"""
+        Please enhance the following social media text to make it more engaging, informative, and professional for a news-style format. Follow these guidelines:
+
+        1. **Keep it concise** (120-250 characters)
+        2. **Make it engaging** - use compelling language
+        3. **Add context** if needed for better understanding
+        4. **Use emojis sparingly** (max 2-3 relevant emojis)
+        5. **Maintain the core message** and key information
+        6. **Write in a neutral, news-style tone**
+        7. **Highlight the main point** clearly
+        8. **Make it easily understandable**
+
+        Original text: "{original_text}"
+
+        Enhanced version should be ready to use as a social media post caption. Return ONLY the enhanced text without any explanations or additional text.
+        """
+        
+        if tweet_url:
+            base_prompt += f"\nSource context: {tweet_url}"
+            
+        return base_prompt
+        
+    async def _call_perplexity_api(self, prompt):
+        """Make API call to Perplexity AI"""
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": "llama-3.1-sonar-small-128k-online",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a social media content enhancer. Your task is to rewrite text to make it more engaging, concise, and suitable for news-style social media posts. Always return only the enhanced text without any additional explanations."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "max_tokens": 300,
+            "temperature": 0.7,
+            "top_p": 0.9
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.base_url, headers=headers, json=payload, timeout=30) as response:
+                    
+                    if response.status == 200:
+                        data = await response.json()
+                        enhanced_text = data['choices'][0]['message']['content'].strip()
+                        
+                        # Clean up the response
+                        enhanced_text = self._clean_enhanced_text(enhanced_text)
+                        return enhanced_text
+                        
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Perplexity API error: {response.status} - {error_text}")
+                        return None
+                        
+        except asyncio.TimeoutError:
+            logger.error("Perplexity API request timeout")
+            return None
+        except Exception as e:
+            logger.error(f"Perplexity API call failed: {str(e)}")
+            return None
+            
+    def _clean_enhanced_text(self, text):
+        """Clean and format the enhanced text"""
+        if not text:
+            return text
+            
+        # Remove quotation marks if present
+        text = text.strip('"\'')
+        
+        # Remove any introductory phrases
+        remove_phrases = [
+            "Enhanced text:",
+            "Here's the enhanced version:",
+            "Enhanced version:",
+            "News-style caption:",
+            "Social media post:"
+        ]
+        
+        for phrase in remove_phrases:
+            if text.startswith(phrase):
+                text = text[len(phrase):].strip()
+                
+        # Ensure proper formatting
+        text = ' '.join(text.split())  # Remove extra whitespace
+        
+        return text
+
+# Global text enhancer instance
+text_enhancer = TextEnhancer()
 
 class TwitterBot:
     def __init__(self):
@@ -35,6 +179,7 @@ class TwitterBot:
         self.runner = None
         self.site = None
         self.polling_task = None
+        self.current_tweet_url = None  # Store current tweet URL for caption enhancement
 
     def is_admin(self, user_id):
         """Check if user is admin"""
@@ -170,6 +315,20 @@ class TwitterBot:
         try:
             caption = self.clean_text(event.message.text) if event.message.text else ""
 
+            # Enhance caption using AI if available
+            if caption and len(caption.strip()) > 10:
+                try:
+                    logger.info("Enhancing caption using AI...")
+                    enhanced_caption = await text_enhancer.enhance_caption(caption, self.current_tweet_url)
+                    if enhanced_caption and enhanced_caption != caption:
+                        caption = enhanced_caption
+                        logger.info("Caption successfully enhanced")
+                    else:
+                        logger.info("Using original caption")
+                except Exception as e:
+                    logger.error(f"Caption enhancement failed: {str(e)}")
+                    # Continue with original caption
+
             if caption:
                 formatted_caption = f"\n\n{caption}\n\n"
             else:
@@ -261,6 +420,7 @@ class TwitterBot:
         self.waiting_for_video = False
         self.current_update = None
         self.quality_selected = False
+        self.current_tweet_url = None
 
     def clean_text(self, text):
         """Remove last 3 lines and clean text"""
@@ -284,9 +444,12 @@ class TwitterBot:
         if not await self.admin_only(update, context):
             return
 
+        ai_feature_status = "✅ **AI Caption Enhancement: ENABLED**" if PERPLEXITY_API_KEY and PERPLEXITY_API_KEY != "YOUR_PERPLEXITY_API_KEY" else "❌ **AI Caption Enhancement: DISABLED**"
+
         await update.message.reply_text(
             "🤖 **Twitter Video Bot Started!**\n\n"
             "📤 **Send any Twitter/X link to download and forward videos.**\n\n"
+            f"{ai_feature_status}\n\n"
             "📋 **Available Commands:**\n"
             "• /task - Schedule posts daily at 7 AM with 1-hour intervals\n"
             "• /task2 - Incremental scheduling (2h, 3h, 4h...)\n"
@@ -415,6 +578,8 @@ class TwitterBot:
                 )
                 return
 
+            # Store the tweet URL for caption enhancement
+            self.current_tweet_url = text
             text = self.clean_text(text)
 
             self.current_update = update
