@@ -48,7 +48,8 @@ class AICaptionEnhancer:
         - Keep original meaning
         - Make it sound like breaking news
         - Return only the enhanced caption
-        - look likes human made not ai genrated
+        - Make it look human-generated, not AI
+        - The text should work well in italic format
         """
         
         return prompt
@@ -67,7 +68,7 @@ class AICaptionEnhancer:
             "messages": [
                 {
                     "role": "system", 
-                    "content": "You are a social media expert who enhances captions to make them more engaging and viral. Always return only the enhanced caption without any explanations."
+                    "content": "You are a social media expert who enhances captions to make them more engaging and viral. Always return only the enhanced caption without any explanations and make sure it looks good in italic formatting."
                 },
                 {
                     "role": "user",
@@ -85,7 +86,7 @@ class AICaptionEnhancer:
                         data = await response.json()
                         content = data['choices'][0]['message']['content'].strip()
                         
-                        # Clean the response
+                        # Clean the response and apply italic formatting
                         content = self._clean_ai_response(content)
                         return content
                         
@@ -103,7 +104,7 @@ class AICaptionEnhancer:
 
     def _clean_ai_response(self, text):
         """
-        Clean AI response from unwanted formatting
+        Clean AI response from unwanted formatting and apply italic style
         """
         if not text:
             return text
@@ -126,9 +127,12 @@ class AICaptionEnhancer:
             if text.lower().startswith(prefix.lower()):
                 text = text[len(prefix):].strip()
                 
-        # Remove any markdown formatting
+        # Remove any existing markdown formatting
         text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # Remove bold
         text = re.sub(r'\*(.*?)\*', r'\1', text)      # Remove italic
+        
+        # Apply italic formatting to the entire text
+        text = f"*{text}*"
         
         return text.strip()
 
