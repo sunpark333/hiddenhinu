@@ -3,6 +3,7 @@ import asyncio
 import pytz
 import os
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timedelta
@@ -33,14 +34,16 @@ class TwitterBot:
         self.scheduled_messages = []
         self.last_processed_message_id = None
         self.incremental_schedule_mode = False
-        self.quality_selection_timeout = 30
+        self.quality_selection_timeout = 60  # Increased timeout
 
     async def initialize_userbot(self):
-        """Initialize Telegram userbot with string session"""
+        """Initialize Telegram userbot with string session in memory"""
         try:
-            # String session se initialize karein
+            # String session directly use karein - no file system
+            session = StringSession(TELEGRAM_SESSION_STRING)
+            
             self.userbot = TelegramClient(
-                session=TELEGRAM_SESSION_STRING,
+                session=session,
                 api_id=int(API_ID),
                 api_hash=API_HASH,
                 loop=self.loop
@@ -57,13 +60,13 @@ class TwitterBot:
                 
             # Test connection
             me = await self.userbot.get_me()
-            logger.info(f"Bot started as: {me.username}")
+            logger.info(f"Bot started as: {me.username} (ID: {me.id})")
             
             # Channel access test
             try:
-                test_message = await self.userbot.send_message(YOUR_CHANNEL_ID, "🤖 Bot initialized and ready!")
-                await test_message.delete()
-                logger.info(f"Verified access to channel {YOUR_CHANNEL_ID}")
+                # Just get channel info, don't send message
+                channel = await self.userbot.get_entity(YOUR_CHANNEL_ID)
+                logger.info(f"Verified access to channel: {channel.title}")
             except Exception as e:
                 logger.error(f"Channel access failed: {str(e)}")
                 raise
@@ -81,19 +84,37 @@ class TwitterBot:
             self.last_processed_message_id = event.message.id
             
             if self.waiting_for_video and self.current_update:
-                await asyncio.sleep(2)  # Increased delay for stability
+                await asyncio.sleep(3)  # Increased delay for stability
+                
+                message_text = event.message.text or ""
+                logger.info(f"Received message from twittervid_bot: {message_text[:100]}...")
                 
                 # Handle quality selection
-                if "Select Video Quality" in event.message.text and not self.quality_selected:
+                if "Select Video Quality" in message_text and not self.quality_selected:
                     logger.info("Quality selection detected")
                     try:
                         buttons = await event.message.get_buttons()
                         if buttons:
-                            # First row ke buttons check karein
-                            if len(buttons) > 0 and len(buttons[0]) > 0:
-                                await buttons[0][0].click()  # First button click karein
+                            # All available buttons try karein
+                            for row in buttons:
+                                for button in row:
+                                    if any(q in button.text for q in ['720', 'HD', 'High', '1080']):
+                                        await button.click()
+                                        quality = button.text
+                                        logger.info(f"Selected quality: {quality}")
+                                        
+                                        if self.current_update and self.current_update.message:
+                                            await self.current_update.message.reply_text(
+                                                f"✅ Video is being downloaded in {quality} quality..."
+                                            )
+                                        self.quality_selected = True
+                                        return
+                            
+                            # If no HD quality found, first button click karein
+                            if buttons[0]:
+                                await buttons[0][0].click()
                                 quality = buttons[0][0].text
-                                logger.info(f"Selected quality: {quality}")
+                                logger.info(f"Selected first available quality: {quality}")
                                 
                                 if self.current_update and self.current_update.message:
                                     await self.current_update.message.reply_text(
@@ -101,11 +122,17 @@ class TwitterBot:
                                     )
                                 self.quality_selected = True
                                 return
+                                
                     except Exception as e:
                         logger.error(f"Error in quality selection: {str(e)}")
+                        # Continue without quality selection
+                        self.quality_selected = True
                 
-                # Handle received video/media
-                if (event.message.media or event.message.text) and self.quality_selected:
+                # Handle received video/media (check if we have media OR if it's the final message)
+                has_media = bool(event.message.media)
+                is_final_message = any(word in message_text for word in ['Download', 'Ready', 'Here', 'Quality'])
+                
+                if (has_media or is_final_message) and self.quality_selected:
                     await self._process_received_video(event)
                     
         except Exception as e:
@@ -116,10 +143,11 @@ class TwitterBot:
         try:
             caption = self.clean_text(event.message.text) if event.message.text else ""
             
+            # Simple caption formatting
             if caption:
-                caption = f"\n\n{caption}\n\n"
+                formatted_caption = f"\n\n{caption}\n\n"
             else:
-                caption = "\n\n"
+                formatted_caption = ""
             
             if self.scheduled_mode or self.incremental_schedule_mode:
                 scheduled_time = self._calculate_schedule_time()
@@ -128,13 +156,13 @@ class TwitterBot:
                     message = await self.userbot.send_file(
                         YOUR_CHANNEL_ID,
                         file=event.message.media,
-                        caption=caption,
+                        caption=formatted_caption,
                         schedule=scheduled_time
                     )
                 else:
                     message = await self.userbot.send_message(
                         YOUR_CHANNEL_ID,
-                        caption,
+                        formatted_caption or "📹 Video Content",
                         schedule=scheduled_time
                     )
                 
@@ -150,12 +178,13 @@ class TwitterBot:
                     await self.userbot.send_file(
                         YOUR_CHANNEL_ID,
                         file=event.message.media,
-                        caption=caption
+                        caption=formatted_caption
                     )
                 else:
+                    # If no media, just send the caption
                     await self.userbot.send_message(
                         YOUR_CHANNEL_ID,
-                        caption
+                        formatted_caption or "📹 Video Content"
                     )
                 
                 if self.current_update and self.current_update.message:
@@ -267,14 +296,15 @@ class TwitterBot:
                 return
 
             message = update.message
-            text = message.text
+            text = message.text.strip()
             
-            # Clean the text (removes last 3 lines and other unwanted content)
-            text = self.clean_text(text)
-            
-            if not text:
-                await message.reply_text("⚠️ Please provide a valid Twitter link.")
+            # Basic Twitter URL validation
+            if not any(domain in text for domain in ['twitter.com', 'x.com']):
+                await message.reply_text("⚠️ Please provide a valid Twitter/X link.")
                 return
+            
+            # Clean the text
+            text = self.clean_text(text)
             
             self.current_update = update
             self.waiting_for_video = True
@@ -287,25 +317,34 @@ class TwitterBot:
             await self.userbot.send_message(TWITTER_VID_BOT, text)
             logger.info(f"Link sent to twittervid_bot: {text}")
             
-            # Wait for quality selection response
+            # Wait for quality selection response with timeout
             start_time = datetime.now()
-            while not self.quality_selected and (datetime.now() - start_time).seconds < self.quality_selection_timeout:
-                await asyncio.sleep(1)
+            while (datetime.now() - start_time).seconds < self.quality_selection_timeout:
+                if self.quality_selected or self.video_received:
+                    break
+                await asyncio.sleep(2)
                 
-            if not self.quality_selected:
-                await message.reply_text("⚠️ Timeout waiting for quality selection. Please try again.")
-                self.waiting_for_video = False
-                self.current_update = None
-                return
+            if not self.quality_selected and not self.video_received:
+                await message.reply_text("⚠️ Timeout waiting for video processing. Please try again.")
+                self._reset_flags()
 
         except Exception as e:
             error_msg = f"❌ Error processing link: {str(e)}"
             logger.error(error_msg)
             if update and update.message:
                 await update.message.reply_text(error_msg)
-            self.waiting_for_video = False
-            self.current_update = None
-            self.quality_selected = False
+            self._reset_flags()
+
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Start command handler"""
+        await update.message.reply_text(
+            "🤖 Twitter Video Bot Started!\n\n"
+            "Send any Twitter/X link to download and forward videos.\n\n"
+            "Commands:\n"
+            "/task - Schedule posts daily\n"
+            "/task2 - Incremental scheduling\n"
+            "/endtask - Stop scheduling"
+        )
 
     def run(self):
         """Main function to run the bot"""
@@ -313,22 +352,28 @@ class TwitterBot:
         
         try:
             # First userbot initialize karein
+            logger.info("Initializing UserBot...")
             self.loop.run_until_complete(self.initialize_userbot())
             
             # Phir bot app start karein
+            logger.info("Starting Telegram Bot...")
             self.bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+            
+            # Add handlers
+            self.bot_app.add_handler(CommandHandler("start", self.start_command))
             self.bot_app.add_handler(CommandHandler("task", self.start_task))
             self.bot_app.add_handler(CommandHandler("task2", self.start_task2))
             self.bot_app.add_handler(CommandHandler("endtask", self.end_task))
             self.bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_link))
             
-            logger.info("Telegram Bot starting...")
+            logger.info("Bot started successfully! Waiting for messages...")
             self.loop.run_until_complete(self.bot_app.run_polling())
             
-        except KeyboardInterrupt:
-            logger.info("Bot stopped by user")
         except Exception as e:
             logger.error(f"Critical error: {str(e)}")
+            # Retry after delay
+            asyncio.sleep(10)
+            self.run()
         finally:
             self.loop.run_until_complete(self.shutdown())
             self.loop.close()
