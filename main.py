@@ -33,7 +33,7 @@ class TwitterBot:
         self.scheduled_messages = []
         self.last_processed_message_id = None
         self.incremental_schedule_mode = False
-        self.quality_selection_timeout = 60  # Increased timeout
+        self.quality_selection_timeout = 60
         self.is_running = False
 
     async def initialize_userbot(self):
@@ -365,13 +365,19 @@ class TwitterBot:
             self.bot_app.add_handler(CommandHandler("endtask", self.end_task))
             self.bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_link))
             
-            logger.info("Bot started successfully! Waiting for messages...")
-            await self.bot_app.run_polling()
+            # Initialize the bot application
+            await self.bot_app.initialize()
             
+            # Start polling
+            await self.bot_app.start()
+            logger.info("Bot started successfully! Waiting for messages...")
+            
+            # Keep the bot running
+            while self.is_running:
+                await asyncio.sleep(1)
+                
         except Exception as e:
             logger.error(f"Critical error: {str(e)}")
-            # Don't retry recursively, just shutdown
-            await self.shutdown()
         finally:
             await self.shutdown()
 
@@ -381,15 +387,18 @@ class TwitterBot:
             # Create new event loop and run
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.run_async())
-        except KeyboardInterrupt:
-            logger.info("Bot stopped by user")
+            try:
+                loop.run_until_complete(self.run_async())
+            except KeyboardInterrupt:
+                logger.info("Bot stopped by user")
+            except Exception as e:
+                logger.error(f"Fatal error: {str(e)}")
+            finally:
+                # Properly close the loop
+                if not loop.is_closed():
+                    loop.close()
         except Exception as e:
-            logger.error(f"Fatal error: {str(e)}")
-        finally:
-            if not self.bot_app:
-                # If bot_app wasn't created, we still need to shutdown
-                loop.run_until_complete(self.shutdown())
+            logger.error(f"Event loop error: {str(e)}")
 
     async def shutdown(self):
         """Shutdown all services properly"""
@@ -401,8 +410,9 @@ class TwitterBot:
         
         try:
             if self.bot_app:
+                if self.bot_app.running:
+                    await self.bot_app.stop()
                 await self.bot_app.shutdown()
-                await self.bot_app.updater.stop()
                 logger.info("Bot app shut down")
         except Exception as e:
             logger.error(f"Error shutting down bot app: {str(e)}")
