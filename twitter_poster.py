@@ -2,48 +2,30 @@ import logging
 import os
 import re
 import asyncio
-from urllib.request import urlretrieve
-from telethon import TelegramClient, events
-from telethon.sessions import StringSession
-from tweepy import Client as TwitterClient
+from tweepy import Client as TwitterClient, OAuth1UserHandler, API
 from tweepy.errors import TweepyException
-from config import TELEGRAM_SESSION_STRING, API_ID, API_HASH, YOUR_SECOND_CHANNEL_ID, TWITTER_BEARER_TOKEN, TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET
+from config import TWITTER_BEARER_TOKEN, TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET
 
 logger = logging.getLogger(__name__)
 
-class TwitterPoster:
+class SimpleTwitterPoster:
     def __init__(self):
-        self.telegram_client = None
         self.twitter_client = None
         self.is_running = False
         
-        # Twitter पोस्टिंग कॉन्फ़िगरेशन
+        # Twitter configuration
         self.config = {
             'MAX_TWITTER_LENGTH': 280,
             'SKIP_LONG_POSTS': True,
             'REMOVE_URLS': True,
-            'REMOVE_HASHTAGS': False,
-            'REMOVE_MENTIONS': False,
-            'ADD_PREFIX': '📢 ',
-            'ADD_SUFFIX': '',
-            'REMOVE_EMOJIS': False,
             'TRIM_EXTRA_SPACES': True,
-            'DOWNLOAD_MEDIA': True,
-            'MAX_MEDIA_SIZE_MB': 50,
-            'PROCESS_EXISTING_MESSAGES': False  # पुराने मैसेज प्रोसेस नहीं करेंगे
         }
 
     async def initialize(self):
-        """Telegram और Twitter क्लाइंट को इनिशियलाइज़ करें"""
+        """Initialize Twitter client only"""
         try:
-            logger.info("Initializing Twitter Poster...")
+            logger.info("Initializing Simple Twitter Poster...")
             
-            # NEW: अलग session string बनाएं मुख्य bot से
-            # हम मुख्य session का use नहीं करेंगे, बल्कि एक अलग approach use करेंगे
-            self.telegram_client = None  # हम मुख्य bot के माध्यम से काम करेंगे
-            logger.info("Twitter poster will use main bot's userbot instance")
-            
-            # Twitter क्लाइंट इनिशियलाइज़ करें
             if all([TWITTER_BEARER_TOKEN, TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET, 
                    TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET]):
                 self.twitter_client = TwitterClient(
@@ -54,193 +36,94 @@ class TwitterPoster:
                     access_token_secret=TWITTER_ACCESS_SECRET
                 )
                 logger.info("Twitter client initialized successfully")
+                self.is_running = True
             else:
-                logger.warning("Twitter credentials not found, Twitter posting disabled")
-                self.twitter_client = None
-            
-            self.is_running = True
-            logger.info(f"Twitter poster initialized for channel: {YOUR_SECOND_CHANNEL_ID}")
-            
+                logger.error("Twitter credentials missing, Twitter poster disabled")
+                self.is_running = False
+                
         except Exception as e:
             logger.error(f"Failed to initialize Twitter poster: {str(e)}")
-            raise
+            self.is_running = False
 
     def process_text(self, text):
-        """Twitter के लिए टेक्स्ट को प्रोसेस करें"""
+        """Process text for Twitter"""
         if not text:
             return ""
             
         processed_text = text
         
-        # URLs हटाएं
+        # Remove URLs
         if self.config['REMOVE_URLS']:
             processed_text = re.sub(r'http\S+|www\S+|https\S+', '', processed_text, flags=re.MULTILINE)
         
-        # हैशटैग हटाएं
-        if self.config['REMOVE_HASHTAGS']:
-            processed_text = re.sub(r'#\w+', '', processed_text)
-        
-        # मेंशन हटाएं
-        if self.config['REMOVE_MENTIONS']:
-            processed_text = re.sub(r'@\w+', '', processed_text)
-        
-        # इमोजी हटाएं
-        if self.config['REMOVE_EMOJIS']:
-            emoji_pattern = re.compile("["
-                u"\U0001F600-\U0001F64F"  # emoticons
-                u"\U0001F300-\U0001F5FF"  # symbols & pictographs
-                u"\U0001F680-\U0001F6FF"  # transport & map symbols
-                u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
-                u"\U00002702-\U000027B0"
-                u"\U000024C2-\U0001F251"
-                "]+", flags=re.UNICODE)
-            processed_text = emoji_pattern.sub(r'', processed_text)
-        
-        # एक्स्ट्रा स्पेस ट्रिम करें
+        # Trim extra spaces
         if self.config['TRIM_EXTRA_SPACES']:
             processed_text = re.sub(r'\s+', ' ', processed_text).strip()
         
-        # प्रीफिक्स जोड़ें
-        if self.config['ADD_PREFIX']:
-            processed_text = f"{self.config['ADD_PREFIX']}{processed_text}"
-        
-        # सफिक्स जोड़ें
-        if self.config['ADD_SUFFIX']:
-            processed_text = f"{processed_text}{self.config['ADD_SUFFIX']}"
-        
-        return processed_text.strip()
+        return processed_text
 
-    async def handle_second_channel_message(self, userbot, message):
-        """दूसरे चैनल की नई मैसेज को हैंडल करें (मुख्य bot से call होगा)"""
+    async def post_to_twitter(self, text, media_path=None):
+        """Post to Twitter"""
         try:
-            logger.info(f"Handling second channel message (ID: {message.id})")
+            if not self.twitter_client or not self.is_running:
+                logger.warning("Twitter client not available")
+                return False
+
+            processed_text = self.process_text(text)
             
-            # मैसेज टेक्स्ट प्रोसेस करें
-            original_text = message.text or message.caption or ""
-            processed_text = self.process_text(original_text)
-            
-            # Twitter पोस्टिंग के लिए चेक करें
-            should_post_to_twitter = True
-            
+            # Check length
             if self.config['SKIP_LONG_POSTS'] and len(processed_text) > self.config['MAX_TWITTER_LENGTH']:
-                logger.warning(f"Message too long for Twitter ({len(processed_text)} chars), skipping")
-                should_post_to_twitter = False
-            
-            # Twitter पर पोस्ट करें
-            if should_post_to_twitter and self.twitter_client:
-                await self.post_to_twitter(userbot, message, processed_text)
-            else:
-                logger.info("Skipped Twitter posting due to length restrictions or no Twitter client")
-                
-        except Exception as e:
-            logger.error(f"Error handling second channel message: {str(e)}")
+                logger.warning(f"Message too long for Twitter ({len(processed_text)} chars)")
+                return False
 
-    async def post_to_twitter(self, userbot, message, processed_text):
-        """Twitter पर पोस्ट करें"""
-        media_path = None
-        try:
-            # मीडिया डाउनलोड करें (अगर है)
             media_ids = []
-            if message.media and self.config['DOWNLOAD_MEDIA']:
-                logger.info("Downloading media for Twitter...")
-                media_path = await self.download_media(userbot, message)
-                if media_path:
-                    media_ids = await self.upload_media_to_twitter(media_path)
-            
-            # Twitter पर पोस्ट करें
+            if media_path and os.path.exists(media_path):
+                try:
+                    # Upload media using v1.1 API
+                    auth = OAuth1UserHandler(
+                        TWITTER_CONSUMER_KEY,
+                        TWITTER_CONSUMER_SECRET,
+                        TWITTER_ACCESS_TOKEN,
+                        TWITTER_ACCESS_SECRET
+                    )
+                    legacy_api = API(auth)
+                    media = legacy_api.media_upload(media_path)
+                    media_ids = [media.media_id]
+                    logger.info(f"Media uploaded to Twitter, ID: {media.media_id}")
+                except Exception as e:
+                    logger.error(f"Error uploading media: {str(e)}")
+
+            # Post to Twitter
             if media_ids:
                 response = self.twitter_client.create_tweet(
                     text=processed_text,
                     media_ids=media_ids
                 )
-                logger.info(f"Tweet with media posted successfully! ID: {response.data['id']}")
             else:
                 response = self.twitter_client.create_tweet(text=processed_text)
-                logger.info(f"Text tweet posted successfully! ID: {response.data['id']}")
-                
+            
+            logger.info(f"Tweet posted successfully! ID: {response.data['id']}")
+            return True
+            
         except TweepyException as e:
             logger.error(f"Twitter API error: {str(e)}")
+            return False
         except Exception as e:
             logger.error(f"Error posting to Twitter: {str(e)}")
-        finally:
-            # टेम्पोररी फाइल्स क्लीन अप करें
-            if media_path and os.path.exists(media_path):
-                try:
-                    os.remove(media_path)
-                    logger.info("Temporary media file cleaned up")
-                except Exception as e:
-                    logger.warning(f"Could not delete temp file: {str(e)}")
-
-    async def download_media(self, userbot, message):
-        """मीडिया को डाउनलोड करें (मुख्य userbot का use करके)"""
-        try:
-            media_path = await userbot.download_media(
-                message,
-                file=f"temp_twitter_media_{message.id}"
-            )
-            
-            # फाइल साइज चेक करें
-            if media_path and os.path.exists(media_path):
-                file_size = os.path.getsize(media_path) / (1024 * 1024)  # MB में
-                if file_size > self.config['MAX_MEDIA_SIZE_MB']:
-                    logger.warning(f"Media file too large ({file_size:.2f}MB), skipping")
-                    os.remove(media_path)
-                    return None
-            
-            return media_path
-            
-        except Exception as e:
-            logger.error(f"Error downloading media: {str(e)}")
-            return None
-
-    async def upload_media_to_twitter(self, media_path):
-        """मीडिया को Twitter पर अपलोड करें"""
-        try:
-            # v1.1 API का उपयोग करके मीडिया अपलोड करें
-            from tweepy import OAuth1UserHandler, API
-            
-            auth = OAuth1UserHandler(
-                TWITTER_CONSUMER_KEY,
-                TWITTER_CONSUMER_SECRET,
-                TWITTER_ACCESS_TOKEN,
-                TWITTER_ACCESS_SECRET
-            )
-            legacy_api = API(auth)
-            
-            media = legacy_api.media_upload(media_path)
-            logger.info(f"Media uploaded to Twitter, ID: {media.media_id}")
-            
-            return [media.media_id]
-            
-        except Exception as e:
-            logger.error(f"Error uploading media to Twitter: {str(e)}")
-            return []
-
-    async def start(self, userbot):
-        """Twitter पोस्टर शुरू करें"""
-        try:
-            await self.initialize()
-            
-            # बैकग्राउंड में चलते रहें
-            while self.is_running:
-                await asyncio.sleep(1)
-                
-        except Exception as e:
-            logger.error(f"Error in Twitter poster: {str(e)}")
-            self.is_running = False
+            return False
 
     async def stop(self):
-        """Twitter पोस्टर बंद करें"""
-        logger.info("Stopping Twitter poster...")
+        """Stop Twitter poster"""
+        logger.info("Stopping Simple Twitter Poster...")
         self.is_running = False
 
-# सिंगलटॉन इंस्टेंस
-twitter_poster = TwitterPoster()
+# Singleton instance
+simple_twitter_poster = SimpleTwitterPoster()
 
-async def start_twitter_poster(userbot):
-    """Twitter पोस्टर शुरू करें (मुख्य बॉट से कॉल करें)"""
-    await twitter_poster.start(userbot)
+async def initialize_twitter_poster():
+    """Initialize Twitter poster"""
+    await simple_twitter_poster.initialize()
 
 async def stop_twitter_poster():
-    """Twitter पोस्टर बंद करें"""
-    await twitter_poster.stop()
+    """Stop Twitter poster"""
+    await simple_twitter_poster.stop()
