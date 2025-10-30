@@ -29,7 +29,8 @@ class TwitterPoster:
             'REMOVE_EMOJIS': False,
             'TRIM_EXTRA_SPACES': True,
             'DOWNLOAD_MEDIA': True,
-            'MAX_MEDIA_SIZE_MB': 50
+            'MAX_MEDIA_SIZE_MB': 50,
+            'PROCESS_EXISTING_MESSAGES': False  # पुराने मैसेज प्रोसेस नहीं करेंगे
         }
 
     async def initialize(self):
@@ -37,36 +38,28 @@ class TwitterPoster:
         try:
             logger.info("Initializing Twitter Poster...")
             
-            # Telegram क्लाइंट इनिशियलाइज़ करें
-            session = StringSession(TELEGRAM_SESSION_STRING)
-            self.telegram_client = TelegramClient(
-                session=session,
-                api_id=int(API_ID),
-                api_hash=API_HASH
-            )
-            
-            await self.telegram_client.start()
-            logger.info("Telegram client started for Twitter poster")
+            # NEW: अलग session string बनाएं मुख्य bot से
+            # हम मुख्य session का use नहीं करेंगे, बल्कि एक अलग approach use करेंगे
+            self.telegram_client = None  # हम मुख्य bot के माध्यम से काम करेंगे
+            logger.info("Twitter poster will use main bot's userbot instance")
             
             # Twitter क्लाइंट इनिशियलाइज़ करें
-            self.twitter_client = TwitterClient(
-                bearer_token=TWITTER_BEARER_TOKEN,
-                consumer_key=TWITTER_CONSUMER_KEY,
-                consumer_secret=TWITTER_CONSUMER_SECRET,
-                access_token=TWITTER_ACCESS_TOKEN,
-                access_token_secret=TWITTER_ACCESS_SECRET
-            )
-            
-            logger.info("Twitter client initialized successfully")
-            
-            # इवेंट हैंडलर रजिस्टर करें
-            self.telegram_client.add_event_handler(
-                self.handle_second_channel_message,
-                events.NewMessage(chats=YOUR_SECOND_CHANNEL_ID)
-            )
+            if all([TWITTER_BEARER_TOKEN, TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET, 
+                   TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET]):
+                self.twitter_client = TwitterClient(
+                    bearer_token=TWITTER_BEARER_TOKEN,
+                    consumer_key=TWITTER_CONSUMER_KEY,
+                    consumer_secret=TWITTER_CONSUMER_SECRET,
+                    access_token=TWITTER_ACCESS_TOKEN,
+                    access_token_secret=TWITTER_ACCESS_SECRET
+                )
+                logger.info("Twitter client initialized successfully")
+            else:
+                logger.warning("Twitter credentials not found, Twitter posting disabled")
+                self.twitter_client = None
             
             self.is_running = True
-            logger.info(f"Twitter poster started monitoring channel: {YOUR_SECOND_CHANNEL_ID}")
+            logger.info(f"Twitter poster initialized for channel: {YOUR_SECOND_CHANNEL_ID}")
             
         except Exception as e:
             logger.error(f"Failed to initialize Twitter poster: {str(e)}")
@@ -117,11 +110,10 @@ class TwitterPoster:
         
         return processed_text.strip()
 
-    async def handle_second_channel_message(self, event):
-        """दूसरे चैनल की नई मैसेज को हैंडल करें"""
+    async def handle_second_channel_message(self, userbot, message):
+        """दूसरे चैनल की नई मैसेज को हैंडल करें (मुख्य bot से call होगा)"""
         try:
-            message = event.message
-            logger.info(f"New message from second channel (ID: {message.id})")
+            logger.info(f"Handling second channel message (ID: {message.id})")
             
             # मैसेज टेक्स्ट प्रोसेस करें
             original_text = message.text or message.caption or ""
@@ -135,15 +127,15 @@ class TwitterPoster:
                 should_post_to_twitter = False
             
             # Twitter पर पोस्ट करें
-            if should_post_to_twitter:
-                await self.post_to_twitter(message, processed_text)
+            if should_post_to_twitter and self.twitter_client:
+                await self.post_to_twitter(userbot, message, processed_text)
             else:
-                logger.info("Skipped Twitter posting due to length restrictions")
+                logger.info("Skipped Twitter posting due to length restrictions or no Twitter client")
                 
         except Exception as e:
             logger.error(f"Error handling second channel message: {str(e)}")
 
-    async def post_to_twitter(self, message, processed_text):
+    async def post_to_twitter(self, userbot, message, processed_text):
         """Twitter पर पोस्ट करें"""
         media_path = None
         try:
@@ -151,7 +143,7 @@ class TwitterPoster:
             media_ids = []
             if message.media and self.config['DOWNLOAD_MEDIA']:
                 logger.info("Downloading media for Twitter...")
-                media_path = await self.download_media(message)
+                media_path = await self.download_media(userbot, message)
                 if media_path:
                     media_ids = await self.upload_media_to_twitter(media_path)
             
@@ -179,10 +171,10 @@ class TwitterPoster:
                 except Exception as e:
                     logger.warning(f"Could not delete temp file: {str(e)}")
 
-    async def download_media(self, message):
-        """मीडिया को डाउनलोड करें"""
+    async def download_media(self, userbot, message):
+        """मीडिया को डाउनलोड करें (मुख्य userbot का use करके)"""
         try:
-            media_path = await self.telegram_client.download_media(
+            media_path = await userbot.download_media(
                 message,
                 file=f"temp_twitter_media_{message.id}"
             )
@@ -224,7 +216,7 @@ class TwitterPoster:
             logger.error(f"Error uploading media to Twitter: {str(e)}")
             return []
 
-    async def start(self):
+    async def start(self, userbot):
         """Twitter पोस्टर शुरू करें"""
         try:
             await self.initialize()
@@ -241,17 +233,13 @@ class TwitterPoster:
         """Twitter पोस्टर बंद करें"""
         logger.info("Stopping Twitter poster...")
         self.is_running = False
-        
-        if self.telegram_client and self.telegram_client.is_connected():
-            await self.telegram_client.disconnect()
-            logger.info("Telegram client disconnected for Twitter poster")
 
 # सिंगलटॉन इंस्टेंस
 twitter_poster = TwitterPoster()
 
-async def start_twitter_poster():
+async def start_twitter_poster(userbot):
     """Twitter पोस्टर शुरू करें (मुख्य बॉट से कॉल करें)"""
-    await twitter_poster.start()
+    await twitter_poster.start(userbot)
 
 async def stop_twitter_poster():
     """Twitter पोस्टर बंद करें"""
