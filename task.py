@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 import re
 from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, YOUR_SECOND_CHANNEL_ID, TIMEZONE, ADMIN_IDS
 from ai_caption_enhancer import AICaptionEnhancer  # Import the AI enhancer
+from twitter_poster import start_twitter_poster, stop_twitter_poster  # Import Twitter poster
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class TwitterBot:
         self.polling_task = None
         self._polling_started = False
         self.ai_enhancer = AICaptionEnhancer()  # Initialize AI enhancer
+        self.twitter_poster_enabled = True  # Twitter poster feature
 
     def is_admin(self, user_id):
         """Check if user is admin"""
@@ -363,9 +365,29 @@ class TwitterBot:
             "• **1 hour** - Daily at 7 AM with 1-hour intervals\n"
             "• **now send** - Incremental scheduling (2h, 3h, 4h...)\n"
             "• **2 hour** - Fixed 2-hour intervals starting from 7 AM\n\n"
+            "🐦 **Twitter Auto-Poster:** " + ("✅ ENABLED" if self.twitter_poster_enabled else "❌ DISABLED") + "\n\n"
             "🎯 **Select a scheduling mode or send link directly:**",
             reply_markup=reply_markup
         )
+
+    async def twitter_poster_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Twitter पोस्टर को enable/disable करें"""
+        if not await self.admin_only(update, context):
+            return
+
+        if context.args and context.args[0].lower() in ['on', 'enable', 'start']:
+            self.twitter_poster_enabled = True
+            await update.message.reply_text("✅ Twitter poster enabled! Second channel posts will be auto-posted to Twitter.")
+        elif context.args and context.args[0].lower() in ['off', 'disable', 'stop']:
+            self.twitter_poster_enabled = False
+            await update.message.reply_text("❌ Twitter poster disabled!")
+        else:
+            status = "enabled" if self.twitter_poster_enabled else "disabled"
+            await update.message.reply_text(
+                f"📊 **Twitter Poster Status:** **{status.upper()}**\n\n"
+                "Use `/twitter_poster on` to enable\n"
+                "Use `/twitter_poster off` to disable"
+            )
 
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle button callbacks"""
@@ -591,6 +613,7 @@ class TwitterBot:
             self.bot_app.add_handler(CommandHandler("task2", self.start_task2))
             self.bot_app.add_handler(CommandHandler("task3", self.start_task3))
             self.bot_app.add_handler(CommandHandler("endtask", self.end_task))
+            self.bot_app.add_handler(CommandHandler("twitter_poster", self.twitter_poster_command))
             self.bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_link))
             self.bot_app.add_handler(CallbackQueryHandler(self.button_handler))
 
@@ -641,6 +664,11 @@ class TwitterBot:
                 logger.info("Stopping HTTP server...")
                 await self.runner.cleanup()
                 
+            # Twitter पोस्टर बंद करें
+            if self.twitter_poster_enabled:
+                logger.info("Stopping Twitter poster...")
+                await stop_twitter_poster()
+                
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
         
@@ -654,6 +682,11 @@ class TwitterBot:
             
             logger.info("Initializing UserBot...")
             await self.initialize_userbot()
+            
+            # Twitter पोस्टर शुरू करें (अगर enable है)
+            if self.twitter_poster_enabled:
+                logger.info("Starting Twitter poster...")
+                asyncio.create_task(start_twitter_poster())
             
             await self.start_polling()
             
