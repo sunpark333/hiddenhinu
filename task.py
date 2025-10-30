@@ -44,7 +44,6 @@ class TwitterBot:
         # Twitter posting feature
         self.twitter_poster_enabled = True
         self.twitter_client = None
-        self.second_channel_handler_added = False
 
     async def initialize_twitter_client(self):
         """Initialize Twitter client"""
@@ -562,7 +561,193 @@ class TwitterBot:
             logger.error(f"Error in button handler: {e}")
             await query.edit_message_text("❌ Error processing your request. Please try again.")
 
-    # ... (rest of the methods remain the same as your original code - start_task, start_task2, start_task3, end_task, process_link)
+    async def start_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Start scheduled posting mode"""
+        if not await self.admin_only(update, context):
+            return
+
+        await self._start_task_common(update, context)
+
+    async def start_task_callback(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Start scheduled posting mode from callback"""
+        await self._start_task_common(query, context, is_callback=True)
+
+    async def start_task2(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Start incremental scheduled posting mode"""
+        if not await self.admin_only(update, context):
+            return
+
+        await self._start_task2_common(update, context)
+
+    async def start_task2_callback(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Start incremental scheduled posting mode from callback"""
+        await self._start_task2_common(query, context, is_callback=True)
+
+    async def start_task3(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Start fixed 2-hour interval scheduling mode starting from 7 AM"""
+        if not await self.admin_only(update, context):
+            return
+
+        await self._start_task3_common(update, context)
+
+    async def start_task3_callback(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Start fixed 2-hour interval scheduling mode from callback"""
+        await self._start_task3_common(query, context, is_callback=True)
+
+    async def _start_task_common(self, update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+        """Common function for starting task mode"""
+        self.scheduled_mode = True
+        self.incremental_schedule_mode = False
+        self.fixed_interval_mode = False
+        self.scheduled_counter = 0
+        self.scheduled_messages = []
+
+        now = datetime.now(TIMEZONE)
+        first_schedule_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
+        if first_schedule_time < now:
+            first_schedule_time += timedelta(days=1)
+
+        response_text = (
+            "📅 **1 Hour Mode Activated!**\n\n"
+            f"⏰ First video: {first_schedule_time.strftime('%Y-%m-%d %H:%M')} IST\n"
+            f"🕐 Each new video: +1 hour interval\n\n"
+            "❌ Use /endtask to stop scheduled posting."
+        )
+
+        if is_callback:
+            await update.edit_message_text(response_text)
+        else:
+            await update.message.reply_text(response_text)
+
+    async def _start_task2_common(self, update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+        """Common function for starting task2 mode"""
+        self.incremental_schedule_mode = True
+        self.scheduled_mode = False
+        self.fixed_interval_mode = False
+        self.scheduled_counter = 0
+        self.scheduled_messages = []
+
+        now = datetime.now(TIMEZONE)
+        first_schedule_time = now + timedelta(hours=2)
+
+        response_text = (
+            "⏱️ **Now Send Mode Activated!**\n\n"
+            f"⏰ First video: {first_schedule_time.strftime('%Y-%m-%d %H:%M')} IST\n"
+            f"🕐 Next intervals: +2h, +3h, +4h...\n\n"
+            "❌ Use /endtask to stop scheduled posting."
+        )
+
+        if is_callback:
+            await update.edit_message_text(response_text)
+        else:
+            await update.message.reply_text(response_text)
+
+    async def _start_task3_common(self, update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+        """Common function for starting task3 mode"""
+        self.fixed_interval_mode = True
+        self.scheduled_mode = False
+        self.incremental_schedule_mode = False
+        self.scheduled_counter = 0
+        self.scheduled_messages = []
+
+        now = datetime.now(TIMEZONE)
+        first_schedule_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
+        if first_schedule_time < now:
+            first_schedule_time += timedelta(days=1)
+
+        second_schedule_time = first_schedule_time + timedelta(hours=2)
+        third_schedule_time = first_schedule_time + timedelta(hours=4)
+
+        response_text = (
+            "🕑 **2 Hour Mode Activated!**\n\n"
+            f"⏰ Schedule starts at: 7:00 AM IST\n"
+            f"🕐 Fixed interval: Every 2 hours\n\n"
+            f"📅 Example schedule:\n"
+            f"• 1st post: {first_schedule_time.strftime('%H:%M')} IST\n"
+            f"• 2nd post: {second_schedule_time.strftime('%H:%M')} IST\n"
+            f"• 3rd post: {third_schedule_time.strftime('%H:%M')} IST\n\n"
+            "❌ Use /endtask to stop scheduled posting."
+        )
+
+        if is_callback:
+            await update.edit_message_text(response_text)
+        else:
+            await update.message.reply_text(response_text)
+
+    async def end_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """End scheduled posting mode"""
+        if not await self.admin_only(update, context):
+            return
+
+        self.scheduled_mode = False
+        self.incremental_schedule_mode = False
+        self.fixed_interval_mode = False
+
+        await update.message.reply_text(
+            "🚫 **Scheduled Mode Deactivated!**\n\n"
+            "✅ Videos will now be posted immediately.\n"
+            f"📊 Total {self.scheduled_counter} videos were scheduled.\n\n"
+            "🎯 Use commands to start scheduling again:"
+        )
+
+        self.scheduled_counter = 0
+        self.scheduled_messages = []
+
+    async def process_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Process Twitter links"""
+        try:
+            if not await self.admin_only(update, context):
+                return
+
+            if not update or not update.message or not update.message.text:
+                await update.message.reply_text(
+                    "⚠️ Please provide a valid Twitter link."
+                )
+                return
+
+            message = update.message
+            text = message.text.strip()
+
+            if not any(domain in text for domain in ['twitter.com', 'x.com']):
+                await message.reply_text(
+                    "⚠️ Please provide a valid Twitter/X link."
+                )
+                return
+
+            text = self.clean_text(text)
+
+            self.current_update = update
+            self.waiting_for_video = True
+            self.quality_selected = False
+            self.video_received = False
+
+            await message.reply_text(
+                "⏳ Processing link and downloading video..."
+            )
+
+            await self.userbot.send_message(TWITTER_VID_BOT, text)
+            logger.info(f"Link sent to twittervid_bot: {text}")
+
+            start_time = datetime.now()
+            while (datetime.now() - start_time).seconds < self.quality_selection_timeout:
+                if self.quality_selected or self.video_received:
+                    break
+                await asyncio.sleep(2)
+
+            if not self.quality_selected and not self.video_received:
+                await message.reply_text(
+                    "⚠️ Timeout waiting for video processing. Please try again."
+                )
+                self._reset_flags()
+
+        except Exception as e:
+            error_msg = f"❌ Error processing link: {str(e)}"
+            logger.error(error_msg)
+            if update and update.message:
+                await update.message.reply_text(
+                    error_msg
+                )
+            self._reset_flags()
 
     async def start_polling(self):
         """Start bot polling in a separate task"""
