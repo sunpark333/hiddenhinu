@@ -10,7 +10,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from datetime import datetime, timedelta
 import re
-from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, TIMEZONE, ADMIN_IDS
+from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, YOUR_SECOND_CHANNEL_ID, TIMEZONE, ADMIN_IDS
+from ai_caption_enhancer import AICaptionEnhancer  # Import the AI enhancer
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class TwitterBot:
         self.site = None
         self.polling_task = None
         self._polling_started = False
+        self.ai_enhancer = AICaptionEnhancer()  # Initialize AI enhancer
 
     def is_admin(self, user_id):
         """Check if user is admin"""
@@ -129,6 +131,9 @@ class TwitterBot:
             try:
                 channel = await self.userbot.get_entity(YOUR_CHANNEL_ID)
                 logger.info(f"Verified access to channel: {channel.title}")
+                
+                second_channel = await self.userbot.get_entity(YOUR_SECOND_CHANNEL_ID)
+                logger.info(f"Verified access to second channel: {second_channel.title}")
             except Exception as e:
                 logger.error(f"Channel access failed: {str(e)}")
                 raise
@@ -203,68 +208,93 @@ class TwitterBot:
             logger.error(f"Error in handle_twittervid_message: {str(e)}")
 
     async def _process_received_video(self, event):
-        """Process received video and send to channel"""
+        """Process received video and send to both channels with AI-enhanced caption for second channel"""
         try:
-            caption = self.clean_text(event.message.text) if event.message.text else ""
+            original_caption = self.clean_text(event.message.text) if event.message.text else ""
 
-            if caption:
-                formatted_caption = f"\n\n{caption}\n\n"
-            else:
-                formatted_caption = ""
+            # Prepare captions for both channels
+            first_channel_caption = f"\n\n{original_caption}\n\n" if original_caption else ""
+            
+            # Enhance caption for second channel using AI
+            second_channel_caption = await self._get_enhanced_caption(original_caption)
 
+            # Function to send to a channel
+            async def send_to_channel(channel_id, caption_text):
+                if event.message.media:
+                    return await self.userbot.send_file(
+                        channel_id,
+                        file=event.message.media,
+                        caption=caption_text,
+                        schedule=scheduled_time if self.scheduled_mode or self.incremental_schedule_mode or self.fixed_interval_mode else None
+                    )
+                else:
+                    return await self.userbot.send_message(
+                        channel_id,
+                        caption_text or "📹 Video Content",
+                        schedule=scheduled_time if self.scheduled_mode or self.incremental_schedule_mode or self.fixed_interval_mode else None
+                    )
+
+            # Calculate schedule time if in scheduled mode
+            scheduled_time = None
             if self.scheduled_mode or self.incremental_schedule_mode or self.fixed_interval_mode:
                 scheduled_time = self._calculate_schedule_time()
 
-                if event.message.media:
-                    message = await self.userbot.send_file(
-                        YOUR_CHANNEL_ID,
-                        file=event.message.media,
-                        caption=formatted_caption,
-                        schedule=scheduled_time
-                    )
-                else:
-                    message = await self.userbot.send_message(
-                        YOUR_CHANNEL_ID,
-                        formatted_caption or "📹 Video Content",
-                        schedule=scheduled_time
-                    )
+            # Send to first channel (original caption)
+            message1 = await send_to_channel(YOUR_CHANNEL_ID, first_channel_caption)
+            
+            # Send to second channel (AI-enhanced caption)
+            message2 = await send_to_channel(YOUR_SECOND_CHANNEL_ID, second_channel_caption)
 
+            # Update counters and send success message
+            if self.scheduled_mode or self.incremental_schedule_mode or self.fixed_interval_mode:
                 self.scheduled_counter += 1
-                self.scheduled_messages.append(message.id)
+                self.scheduled_messages.extend([message1.id, message2.id])
 
                 if self.current_update and self.current_update.message:
                     await self.current_update.message.reply_text(
-                        f"✅ Video successfully scheduled for {scheduled_time.strftime('%Y-%m-%d %H:%M')} IST!"
+                        f"✅ Video successfully scheduled for {scheduled_time.strftime('%Y-%m-%d %H:%M')} IST in both channels!\n"
+                        f"📝 Second channel caption enhanced with AI."
                     )
             else:
-                if event.message.media:
-                    await self.userbot.send_file(
-                        YOUR_CHANNEL_ID,
-                        file=event.message.media,
-                        caption=formatted_caption
-                    )
-                else:
-                    await self.userbot.send_message(
-                        YOUR_CHANNEL_ID,
-                        formatted_caption or "📹 Video Content"
-                    )
-
                 if self.current_update and self.current_update.message:
                     await self.current_update.message.reply_text(
-                        "✅ Video successfully sent to your channel!"
+                        "✅ Video successfully sent to both channels!\n"
+                        "📝 Second channel caption enhanced with AI."
                     )
 
-            logger.info(f"Message sent to channel {YOUR_CHANNEL_ID}")
+            logger.info(f"Message sent to both channels: {YOUR_CHANNEL_ID} and {YOUR_SECOND_CHANNEL_ID}")
             self._reset_flags()
 
         except Exception as e:
-            error_msg = f"❌ Error sending video to channel: {str(e)}"
+            error_msg = f"❌ Error sending video to channels: {str(e)}"
             logger.error(error_msg)
             if self.current_update and self.current_update.message:
                 await self.current_update.message.reply_text(
                     error_msg
                 )
             self._reset_flags()
+
+    async def _get_enhanced_caption(self, original_caption):
+        """
+        Get AI-enhanced caption for second channel
+        """
+        try:
+            if not original_caption or len(original_caption.strip()) < 10:
+                return f"\n\n{original_caption}\n\n" if original_caption else ""
+            
+            logger.info("Enhancing caption for second channel using AI...")
+            enhanced_caption = await self.ai_enhancer.enhance_caption(original_caption)
+            
+            if enhanced_caption and enhanced_caption != original_caption:
+                logger.info("Caption successfully enhanced with AI")
+                return f"\n\n{enhanced_caption}\n\n"
+            else:
+                logger.info("Using original caption (AI enhancement failed or not available)")
+                return f"\n\n{original_caption}\n\n"
+                
+        except Exception as e:
+            logger.error(f"Error in AI caption enhancement: {str(e)}")
+            return f"\n\n{original_caption}\n\n"
 
     def _calculate_schedule_time(self):
         """Calculate schedule time based on mode"""
