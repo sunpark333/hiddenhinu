@@ -84,7 +84,7 @@ class TwitterBot:
         processed_text = re.sub(r'\s+', ' ', processed_text).strip()
         
         # Add prefix
-        processed_text = f"📢 {processed_text}"
+        # processed_text = f" {processed_text}"
         
         return processed_text
 
