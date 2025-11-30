@@ -23,7 +23,7 @@ class BotRunner:
             logger.info("Starting Telegram Bot...")
             self.bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-            # Add handlers
+            # Add handlers - FIXED: Use proper method references
             self.bot_app.add_handler(CommandHandler("start", self.bot.handlers.start_command))
             self.bot_app.add_handler(CommandHandler("task", self.bot.handlers.start_task))
             self.bot_app.add_handler(CommandHandler("task2", self.bot.handlers.start_task2))
@@ -53,14 +53,14 @@ class BotRunner:
             )
             
             self._polling_started = True
-            logger.info("Bot polling started successfully! Waiting for messages...")
+            logger.info("✅ Bot polling started successfully! Waiting for messages...")
             
             # Keep the polling running
             while not self._shutdown_flag and self._polling_started:
                 await asyncio.sleep(1)
                 
         except Exception as e:
-            logger.error(f"Error in polling: {e}")
+            logger.error(f"❌ Error in polling: {e}")
             self._polling_started = False
             raise
 
@@ -74,6 +74,6 @@ class BotRunner:
                 await self.bot_app.stop()
                 await self.bot_app.shutdown()
                 self._polling_started = False
-                logger.info("Bot application stopped successfully")
+                logger.info("✅ Bot application stopped successfully")
             except Exception as e:
-                logger.error(f"Error stopping bot: {e}")
+                logger.error(f"❌ Error stopping bot: {e}")
