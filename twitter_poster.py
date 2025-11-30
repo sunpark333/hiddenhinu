@@ -1,31 +1,20 @@
 import logging
 import os
 import re
-import asyncio
 from tweepy import Client as TwitterClient, OAuth1UserHandler, API
 from tweepy.errors import TweepyException
 from config import TWITTER_BEARER_TOKEN, TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET
 
 logger = logging.getLogger(__name__)
 
-class SimpleTwitterPoster:
+class TwitterPoster:
     def __init__(self):
+        self.twitter_poster_enabled = True
         self.twitter_client = None
-        self.is_running = False
-        
-        # Twitter configuration
-        self.config = {
-            'MAX_TWITTER_LENGTH': 280,
-            'SKIP_LONG_POSTS': True,
-            'REMOVE_URLS': True,
-            'TRIM_EXTRA_SPACES': True,
-        }
 
-    async def initialize(self):
-        """Initialize Twitter client only"""
+    async def initialize_twitter_client(self):
+        """Initialize Twitter client"""
         try:
-            logger.info("Initializing Simple Twitter Poster...")
-            
             if all([TWITTER_BEARER_TOKEN, TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET, 
                    TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET]):
                 self.twitter_client = TwitterClient(
@@ -36,46 +25,46 @@ class SimpleTwitterPoster:
                     access_token_secret=TWITTER_ACCESS_SECRET
                 )
                 logger.info("Twitter client initialized successfully")
-                self.is_running = True
+                return True
             else:
-                logger.error("Twitter credentials missing, Twitter poster disabled")
-                self.is_running = False
-                
+                logger.warning("Twitter credentials not complete, Twitter posting disabled")
+                return False
         except Exception as e:
-            logger.error(f"Failed to initialize Twitter poster: {str(e)}")
-            self.is_running = False
+            logger.error(f"Failed to initialize Twitter client: {str(e)}")
+            return False
 
-    def process_text(self, text):
-        """Process text for Twitter"""
+    def process_text_for_twitter(self, text):
+        """Process text for Twitter posting"""
         if not text:
             return ""
             
         processed_text = text
         
         # Remove URLs
-        if self.config['REMOVE_URLS']:
-            processed_text = re.sub(r'http\S+|www\S+|https\S+', '', processed_text, flags=re.MULTILINE)
+        processed_text = re.sub(r'http\S+|www\S+|https\S+', '', processed_text, flags=re.MULTILINE)
+        
+        # Remove hashtags and mentions if needed
+        processed_text = re.sub(r'#\w+', '', processed_text)
+        processed_text = re.sub(r'@\w+', '', processed_text)
         
         # Trim extra spaces
-        if self.config['TRIM_EXTRA_SPACES']:
-            processed_text = re.sub(r'\s+', ' ', processed_text).strip()
+        processed_text = re.sub(r'\s+', ' ', processed_text).strip()
         
         return processed_text
 
     async def post_to_twitter(self, text, media_path=None):
-        """Post to Twitter"""
+        """Post content to Twitter"""
         try:
-            if not self.twitter_client or not self.is_running:
-                logger.warning("Twitter client not available")
+            if not self.twitter_client or not self.twitter_poster_enabled:
                 return False
 
-            processed_text = self.process_text(text)
+            processed_text = self.process_text_for_twitter(text)
             
-            # Check length
-            if self.config['SKIP_LONG_POSTS'] and len(processed_text) > self.config['MAX_TWITTER_LENGTH']:
-                logger.warning(f"Message too long for Twitter ({len(processed_text)} chars)")
-                return False
-
+            # Check length (280 characters for Twitter)
+            if len(processed_text) > 280:
+                logger.warning(f"Message too long for Twitter ({len(processed_text)} chars), trimming")
+                processed_text = processed_text[:277] + "..."
+            
             media_ids = []
             if media_path and os.path.exists(media_path):
                 try:
@@ -87,11 +76,19 @@ class SimpleTwitterPoster:
                         TWITTER_ACCESS_SECRET
                     )
                     legacy_api = API(auth)
+                    
+                    # Check file size
+                    file_size = os.path.getsize(media_path) / (1024 * 1024)
+                    if file_size > 50:
+                        logger.warning(f"Media file too large ({file_size:.2f}MB)")
+                        return False
+                    
                     media = legacy_api.media_upload(media_path)
                     media_ids = [media.media_id]
                     logger.info(f"Media uploaded to Twitter, ID: {media.media_id}")
                 except Exception as e:
-                    logger.error(f"Error uploading media: {str(e)}")
+                    logger.error(f"Error uploading media to Twitter: {str(e)}")
+                    return False
 
             # Post to Twitter
             if media_ids:
@@ -112,18 +109,40 @@ class SimpleTwitterPoster:
             logger.error(f"Error posting to Twitter: {str(e)}")
             return False
 
-    async def stop(self):
-        """Stop Twitter poster"""
-        logger.info("Stopping Simple Twitter Poster...")
-        self.is_running = False
+    async def handle_second_channel_message(self, userbot, event, YOUR_SECOND_CHANNEL_ID):
+        """Handle messages from second channel for Twitter posting"""
+        try:
+            if not self.twitter_poster_enabled or not self.twitter_client:
+                return
 
-# Singleton instance
-simple_twitter_poster = SimpleTwitterPoster()
-
-async def initialize_twitter_poster():
-    """Initialize Twitter poster"""
-    await simple_twitter_poster.initialize()
-
-async def stop_twitter_poster():
-    """Stop Twitter poster"""
-    await simple_twitter_poster.stop()
+            message = event.message
+            logger.info(f"New message from second channel (ID: {message.id}) for Twitter posting")
+            
+            # Get message text
+            original_text = message.text or message.caption or ""
+            
+            # Download media if present
+            media_path = None
+            if message.media:
+                media_path = await userbot.download_media(
+                    message,
+                    file=f"temp_twitter_media_{message.id}"
+                )
+            
+            # Post to Twitter
+            success = await self.post_to_twitter(original_text, media_path)
+            
+            if success:
+                logger.info("Successfully posted to Twitter from second channel")
+            else:
+                logger.warning("Failed to post to Twitter from second channel")
+                
+            # Clean up temporary file
+            if media_path and os.path.exists(media_path):
+                try:
+                    os.remove(media_path)
+                except Exception as e:
+                    logger.warning(f"Could not delete temp file: {str(e)}")
+                    
+        except Exception as e:
+            logger.error(f"Error handling second channel message for Twitter: {str(e)}")
