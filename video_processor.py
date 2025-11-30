@@ -2,6 +2,7 @@ import logging
 import asyncio
 import re
 import os
+import subprocess
 from datetime import datetime, timedelta
 from config import YOUR_CHANNEL_ID, YOUR_SECOND_CHANNEL_ID, TIMEZONE, TWITTER_VID_BOT, WATERMARK_ENABLED, WATERMARK_LOGO_PATH, WATERMARK_POSITION, WATERMARK_OPACITY
 from ai_caption_enhancer import AICaptionEnhancer
@@ -15,7 +16,7 @@ class WatermarkProcessor:
         self.opacity = WATERMARK_OPACITY
         
     async def add_watermark_to_image(self, image_path):
-        """Add watermark to image"""
+        """Add watermark to image using PIL"""
         try:
             if not os.path.exists(self.logo_path):
                 logger.warning("Watermark logo not found, skipping watermark")
@@ -51,27 +52,77 @@ class WatermarkProcessor:
             output_path = image_path.replace('.', '_watermarked.')
             watermarked_image.save(output_path, quality=95)
             
-            logger.info(f"Watermark added to image: {output_path}")
+            logger.info(f"✅ Watermark added to image: {output_path}")
             return output_path
             
         except Exception as e:
-            logger.error(f"Error adding watermark to image: {str(e)}")
+            logger.error(f"❌ Error adding watermark to image: {str(e)}")
             return image_path
             
     async def add_watermark_to_video(self, video_path):
-        """Add watermark to video - Simplified version without OpenCV"""
+        """Add watermark to video using FFmpeg if available"""
         try:
             if not os.path.exists(self.logo_path):
                 logger.warning("Watermark logo not found, skipping video watermark")
                 return video_path
-                
-            # For now, return original video (advanced video watermarking requires FFmpeg/OpenCV)
-            logger.info("Video watermarking requires additional setup. Using original video.")
-            return video_path
             
+            # Check if FFmpeg is available
+            if not self._check_ffmpeg():
+                logger.warning("FFmpeg not available, using original video")
+                return video_path
+                
+            # Calculate position for video
+            position_str = self._get_ffmpeg_position()
+            
+            # Create output path
+            output_path = video_path.replace('.mp4', '_watermarked.mp4')
+            
+            # FFmpeg command to add watermark
+            cmd = [
+                'ffmpeg', '-i', video_path, '-i', self.logo_path,
+                '-filter_complex', f'overlay={position_str}',
+                '-codec:a', 'copy', output_path, '-y'
+            ]
+            
+            logger.info(f"Adding watermark to video with command: {' '.join(cmd)}")
+            
+            # Run FFmpeg command
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0 and os.path.exists(output_path):
+                logger.info(f"✅ Watermark added to video: {output_path}")
+                return output_path
+            else:
+                logger.error(f"❌ FFmpeg failed: {result.stderr}")
+                return video_path
+                
         except Exception as e:
-            logger.error(f"Error in video watermarking: {str(e)}")
+            logger.error(f"❌ Error in video watermarking: {str(e)}")
             return video_path
+    
+    def _check_ffmpeg(self):
+        """Check if FFmpeg is available"""
+        try:
+            subprocess.run(['ffmpeg', '-version'], capture_output=True)
+            return True
+        except:
+            logger.warning("FFmpeg not found in system")
+            return False
+            
+    def _get_ffmpeg_position(self):
+        """Get FFmpeg overlay position string"""
+        if self.position == 'top-left':
+            return '10:10'
+        elif self.position == 'top-right':
+            return 'main_w-overlay_w-10:10'
+        elif self.position == 'bottom-left':
+            return '10:main_h-overlay_h-10'
+        elif self.position == 'bottom-right':
+            return 'main_w-overlay_w-10:main_h-overlay_h-10'
+        elif self.position == 'center':
+            return '(main_w-overlay_w)/2:(main_h-overlay_h)/2'
+        else:  # default to bottom-right
+            return 'main_w-overlay_w-10:main_h-overlay_h-10'
             
     def _calculate_position(self, image_size, watermark_size):
         """Calculate watermark position based on configuration"""
@@ -110,7 +161,7 @@ class WatermarkProcessor:
             if file_path and os.path.exists(file_path) and 'watermarked' in file_path:
                 try:
                     os.remove(file_path)
-                    logger.info(f"Cleaned up temporary file: {file_path}")
+                    logger.info(f"🧹 Cleaned up temporary file: {file_path}")
                 except Exception as e:
                     logger.warning(f"Could not delete temp file {file_path}: {str(e)}")
 
@@ -207,31 +258,50 @@ class VideoProcessor:
                     file=f"temp_media_{event.message.id}"
                 )
                 
+                logger.info(f"📥 Downloaded media: {media_file}")
+                
                 # Add watermark if enabled and file exists
                 if WATERMARK_ENABLED and media_file and os.path.exists(media_file) and self.watermark_processor:
                     try:
-                        if media_file.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
+                        file_extension = media_file.lower()
+                        
+                        if file_extension.endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
                             # Process image watermark
-                            logger.info("Adding watermark to image...")
+                            logger.info("🎨 Adding watermark to image...")
                             watermarked_file = await self.watermark_processor.add_watermark_to_image(media_file)
                             if watermarked_file != media_file:
-                                # Use watermarked file for sending
                                 media_file_to_send = watermarked_file
                                 temp_files_to_cleanup.append(watermarked_file)
                                 logger.info("✅ Watermark added to image")
                             else:
                                 media_file_to_send = media_file
+                                
+                        elif file_extension.endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
+                            # Process video watermark
+                            logger.info("🎬 Adding watermark to video...")
+                            watermarked_file = await self.watermark_processor.add_watermark_to_video(media_file)
+                            if watermarked_file != media_file:
+                                media_file_to_send = watermarked_file
+                                temp_files_to_cleanup.append(watermarked_file)
+                                logger.info("✅ Watermark added to video")
+                            else:
+                                media_file_to_send = media_file
+                                logger.info("ℹ️ Using original video (watermarking not available)")
+                                
                         else:
-                            # For videos, use original file (video watermarking requires advanced setup)
                             media_file_to_send = media_file
-                            logger.info("📹 Video file - watermarking skipped (requires FFmpeg setup)")
+                            logger.info(f"ℹ️ Unknown file type: {media_file}")
+                            
                     except Exception as e:
-                        logger.error(f"Error applying watermark: {str(e)}")
+                        logger.error(f"❌ Error applying watermark: {str(e)}")
                         media_file_to_send = media_file
                 else:
                     media_file_to_send = media_file
+                    if not WATERMARK_ENABLED:
+                        logger.info("ℹ️ Watermark disabled")
             else:
                 media_file_to_send = None
+                logger.info("ℹ️ No media found in message")
 
             # Function to send to a channel
             async def send_to_channel(channel_id, caption_text):
@@ -292,18 +362,20 @@ class VideoProcessor:
                         f"📝 Second channel caption enhanced with AI{watermark_status}"
                     )
 
-            logger.info(f"Message sent to both channels: {YOUR_CHANNEL_ID} and {YOUR_SECOND_CHANNEL_ID}")
+            logger.info(f"📤 Message sent to both channels: {YOUR_CHANNEL_ID} and {YOUR_SECOND_CHANNEL_ID}")
 
             # Clean up temporary files
             try:
                 # Clean original downloaded file
                 if media_file and os.path.exists(media_file) and 'temp_media' in media_file:
                     os.remove(media_file)
+                    logger.info(f"🧹 Cleaned original file: {media_file}")
                 
                 # Clean watermarked files
                 for temp_file in temp_files_to_cleanup:
                     if os.path.exists(temp_file):
                         os.remove(temp_file)
+                        logger.info(f"🧹 Cleaned watermarked file: {temp_file}")
             except Exception as e:
                 logger.warning(f"Could not delete temp files: {str(e)}")
                 
