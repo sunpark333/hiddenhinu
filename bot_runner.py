@@ -14,7 +14,7 @@ class BotRunner:
         self._shutdown_flag = False
 
     async def start_polling(self):
-        """Start bot polling in a separate task"""
+        """Start bot polling with proper webhook cleanup"""
         try:
             if self._polling_started:
                 logger.warning("Polling already started, skipping...")
@@ -33,37 +33,47 @@ class BotRunner:
             self.bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.bot.handlers.process_link))
             self.bot_app.add_handler(CallbackQueryHandler(self.bot.handlers.button_handler))
 
-            logger.info("Bot started successfully! Waiting for messages...")
+            logger.info("Bot handlers registered successfully!")
             
-            # Stop any existing webhook first
+            # IMPORTANT: Delete any existing webhook first
             await self.bot_app.bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Webhook deleted, starting polling...")
+            
             await asyncio.sleep(2)
             
+            # Initialize and start polling
             await self.bot_app.initialize()
             await self.bot_app.start()
-            await self.bot_app.updater.start_polling()
+            
+            # Start polling with specific parameters
+            await self.bot_app.updater.start_polling(
+                poll_interval=1.0,
+                timeout=10,
+                drop_pending_updates=True
+            )
             
             self._polling_started = True
+            logger.info("Bot polling started successfully! Waiting for messages...")
             
             # Keep the polling running
-            while not self._shutdown_flag:
+            while not self._shutdown_flag and self._polling_started:
                 await asyncio.sleep(1)
                 
         except Exception as e:
             logger.error(f"Error in polling: {e}")
             self._polling_started = False
             raise
-        finally:
-            if self.bot_app:
-                await self.bot_app.updater.stop()
+
+    async def shutdown_bot(self):
+        """Shutdown bot application properly"""
+        if self.bot_app:
+            logger.info("Stopping bot application...")
+            try:
+                if hasattr(self.bot_app, 'updater') and self.bot_app.updater.running:
+                    await self.bot_app.updater.stop()
                 await self.bot_app.stop()
                 await self.bot_app.shutdown()
                 self._polling_started = False
-
-    async def shutdown_bot(self):
-        """Shutdown bot application"""
-        if self.bot_app and self.bot_app.running:
-            logger.info("Stopping bot application...")
-            await self.bot_app.updater.stop()
-            await self.bot_app.stop()
-            await self.bot_app.shutdown()
+                logger.info("Bot application stopped successfully")
+            except Exception as e:
+                logger.error(f"Error stopping bot: {e}")
