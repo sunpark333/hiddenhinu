@@ -24,7 +24,7 @@ TWITTER_ACCESS_TOKEN = os.getenv('TWITTER_ACCESS_TOKEN', '')
 TWITTER_ACCESS_SECRET = os.getenv('TWITTER_ACCESS_SECRET', '')
 
 # Watermark Configuration
-WATERMARK_LOGO_PATH = "assets/watermark.png"  # Path to your logo file
+WATERMARK_LOGO_PATH = "hiddenhindu.png"  # Path to your logo file
 WATERMARK_POSITION = "top-left"  # top-left, top-right, bottom-left, bottom-right, center
 WATERMARK_OPACITY = 180  # 0-255 (0=transparent, 255=opaque)
 WATERMARK_ENABLED = True  # Set to False to disable watermark
