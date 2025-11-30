@@ -22,3 +22,9 @@ TWITTER_CONSUMER_KEY = os.getenv('TWITTER_CONSUMER_KEY', '')
 TWITTER_CONSUMER_SECRET = os.getenv('TWITTER_CONSUMER_SECRET', '')
 TWITTER_ACCESS_TOKEN = os.getenv('TWITTER_ACCESS_TOKEN', '')
 TWITTER_ACCESS_SECRET = os.getenv('TWITTER_ACCESS_SECRET', '')
+
+# Watermark Configuration
+WATERMARK_LOGO_PATH = "assets/watermark.png"  # Path to your logo file
+WATERMARK_POSITION = "top-left"  # top-left, top-right, bottom-left, bottom-right, center
+WATERMARK_OPACITY = 180  # 0-255 (0=transparent, 255=opaque)
+WATERMARK_ENABLED = True  # Set to False to disable watermark
