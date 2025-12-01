@@ -2,6 +2,7 @@ import logging
 import asyncio
 import os
 import sys
+import time
 from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, YOUR_SECOND_CHANNEL_ID, TIMEZONE
 from twitter_bot import TwitterBot
 from telegram_bot import TelegramBot
@@ -40,7 +41,8 @@ class MainBot:
             await self.twitter_poster.initialize_twitter_client()
             
             logger.info("Starting Telegram bot polling...")
-            await self.telegram_bot.start_polling()
+            # Start polling in background task
+            asyncio.create_task(self.telegram_bot.start_polling())
             
             # Keep the application running
             while not self._shutdown_flag:
@@ -71,11 +73,22 @@ class MainBot:
         
         while retry_count < max_retries and not self._shutdown_flag:
             try:
+                # Create new event loop for each attempt
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 
                 logger.info(f"Starting bot... (Attempt {retry_count + 1})")
                 loop.run_until_complete(self.run_async())
+                
+                # If we reach here, the bot is running successfully
+                logger.info("Bot is running successfully")
+                try:
+                    # Keep the main thread alive
+                    while not self._shutdown_flag:
+                        time.sleep(1)
+                except KeyboardInterrupt:
+                    logger.info("Received keyboard interrupt, shutting down...")
+                    break
                 
             except KeyboardInterrupt:
                 logger.info("Received keyboard interrupt, shutting down...")
@@ -88,20 +101,21 @@ class MainBot:
                 if retry_count < max_retries:
                     logger.info(f"Retrying in 10 seconds...")
                     try:
-                        loop.run_until_complete(self.shutdown())
+                        if 'loop' in locals() and not loop.is_closed():
+                            loop.run_until_complete(self.shutdown())
                     except Exception as shutdown_error:
                         logger.error(f"Error during shutdown: {shutdown_error}")
-                    import time
                     time.sleep(10)
                 else:
                     logger.error("Maximum retries reached. Exiting...")
                     break
             finally:
                 try:
-                    loop.run_until_complete(self.shutdown())
+                    if 'loop' in locals() and not loop.is_closed():
+                        loop.run_until_complete(self.shutdown())
+                        loop.close()
                 except Exception as e:
                     logger.error(f"Error in final shutdown: {e}")
-                loop.close()
 
 if __name__ == '__main__':
     logger.info("Starting Twitter Bot on Koyeb...")
