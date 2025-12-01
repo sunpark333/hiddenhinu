@@ -239,13 +239,9 @@ class TelegramBot:
         self.twitter_bot.scheduled_counter = 0
         self.twitter_bot.scheduled_messages = []
 
-    async def start_polling(self):
-        """Start bot polling"""
+    async def run_polling(self):
+        """Run bot polling with proper error handling"""
         try:
-            if self._polling_started:
-                logger.warning("Polling already started, skipping...")
-                return
-                
             logger.info("Starting Telegram Bot...")
             self.bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -255,34 +251,30 @@ class TelegramBot:
             self.bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_link))
             self.bot_app.add_handler(CallbackQueryHandler(self.button_handler))
 
-            logger.info("Bot started successfully! Waiting for messages...")
+            logger.info("Bot setup complete! Starting polling...")
             
-            # Stop any existing webhook first
+            # Stop any existing webhook first and wait a bit
             await self.bot_app.bot.delete_webhook(drop_pending_updates=True)
             await asyncio.sleep(2)
             
-            await self.bot_app.initialize()
-            await self.bot_app.start()
-            await self.bot_app.updater.start_polling()
+            # Start polling with error handling
+            logger.info("Bot started successfully! Waiting for messages...")
+            await self.bot_app.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True
+            )
             
-            self._polling_started = True
-            
-            # Keep the polling running
-            while self._polling_started:
-                await asyncio.sleep(1)
-                
         except Exception as e:
             logger.error(f"Error in polling: {e}")
-            self._polling_started = False
             raise
 
     async def shutdown(self):
         """Shutdown telegram bot"""
-        self._polling_started = False
         if self.bot_app:
             logger.info("Stopping bot application...")
             try:
-                await self.bot_app.updater.stop()
+                if self.bot_app.updater and self.bot_app.updater.running:
+                    await self.bot_app.updater.stop()
                 await self.bot_app.stop()
                 await self.bot_app.shutdown()
             except Exception as e:
