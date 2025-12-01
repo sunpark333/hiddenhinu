@@ -127,16 +127,6 @@ class TwitterBot:
                         logger.error(f"Error in final shutdown: {e}")
                     self.loop.close()
 
-# Import the old task.py functions for compatibility
-from video_processor import VideoProcessor as OldVideoProcessor
-from scheduler import Scheduler as OldScheduler
-from twitter_poster import TwitterPoster as OldTwitterPoster
-
-# Create aliases for backward compatibility
-TwitterBot.VideoProcessor = VideoProcessor
-TwitterBot.Scheduler = Scheduler
-TwitterBot.TwitterPoster = TwitterPoster
-
 if __name__ == "__main__":
     bot = TwitterBot()
     bot.run()
