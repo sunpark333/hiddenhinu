@@ -142,40 +142,69 @@ class TwitterBot:
             if self.scheduled_mode or self.incremental_schedule_mode or self.fixed_interval_mode:
                 scheduled_time = self._calculate_schedule_time()
 
-            # Send to first channel
+            # Check if we have actual media (not a webpage)
+            has_real_media = False
+            media_file = None
+            
             if event.message.media:
+                # Check if it's actual media file, not a webpage
+                if hasattr(event.message.media, 'document') or hasattr(event.message.media, 'photo'):
+                    has_real_media = True
+                    # Download the media first
+                    media_file = await self.userbot.download_media(event.message, file="temp_video")
+                    logger.info(f"Downloaded media file: {media_file}")
+                else:
+                    logger.warning(f"Received unsupported media type: {type(event.message.media)}")
+
+            # Send to first channel
+            if has_real_media and media_file:
                 message1 = await self.userbot.send_file(
                     YOUR_CHANNEL_ID,
-                    file=event.message.media,
+                    file=media_file,
                     caption=first_channel_caption,
                     schedule=scheduled_time if scheduled_time else None
                 )
-            else:
+            elif event.message.text:
                 message1 = await self.userbot.send_message(
                     YOUR_CHANNEL_ID,
                     first_channel_caption or "📹 Video Content",
                     schedule=scheduled_time if scheduled_time else None
                 )
+            else:
+                logger.warning("No valid media or text to send")
+                if self.current_update and self.current_update.message:
+                    await self.current_update.message.reply_text("❌ No valid video received. Please try again.")
+                self._reset_flags()
+                return
 
             # Send to second channel
-            if event.message.media:
+            if has_real_media and media_file:
                 message2 = await self.userbot.send_file(
                     YOUR_SECOND_CHANNEL_ID,
-                    file=event.message.media,
+                    file=media_file,
                     caption=first_channel_caption,
                     schedule=scheduled_time if scheduled_time else None
                 )
-            else:
+            elif event.message.text:
                 message2 = await self.userbot.send_message(
                     YOUR_SECOND_CHANNEL_ID,
                     first_channel_caption or "📹 Video Content",
                     schedule=scheduled_time if scheduled_time else None
                 )
 
+            # Clean up downloaded file
+            if media_file and os.path.exists(media_file):
+                try:
+                    os.remove(media_file)
+                    logger.info("Cleaned up temporary media file")
+                except Exception as e:
+                    logger.warning(f"Could not delete temp file: {e}")
+
             # Update counters and send success message
             if self.scheduled_mode or self.incremental_schedule_mode or self.fixed_interval_mode:
                 self.scheduled_counter += 1
-                self.scheduled_messages.extend([message1.id, message2.id])
+                if has_real_media:
+                    self.scheduled_messages.extend([message1.id, message2.id])
 
                 if self.current_update and self.current_update.message:
                     await self.current_update.message.reply_text(
@@ -183,9 +212,14 @@ class TwitterBot:
                     )
             else:
                 if self.current_update and self.current_update.message:
-                    await self.current_update.message.reply_text(
-                        "✅ Video successfully sent to both channels!"
-                    )
+                    if has_real_media:
+                        await self.current_update.message.reply_text(
+                            "✅ Video successfully sent to both channels!"
+                        )
+                    else:
+                        await self.current_update.message.reply_text(
+                            "✅ Message sent to both channels!"
+                        )
 
             logger.info(f"Message sent to both channels: {YOUR_CHANNEL_ID} and {YOUR_SECOND_CHANNEL_ID}")
             self._reset_flags()
@@ -224,6 +258,7 @@ class TwitterBot:
         self.waiting_for_video = False
         self.current_update = None
         self.quality_selected = False
+        self.last_processed_message_id = None
 
     def clean_text(self, text):
         """Remove last 3 lines and clean text"""
@@ -247,6 +282,7 @@ class TwitterBot:
             self.waiting_for_video = True
             self.quality_selected = False
             self.video_received = False
+            self.last_processed_message_id = None
 
             await self.userbot.send_message(TWITTER_VID_BOT, text)
             logger.info(f"Link sent to twittervid_bot: {text}")
