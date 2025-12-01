@@ -130,4 +130,33 @@ class TwitterPoster:
                 )
             
             # Post to Twitter
-            success = await self.post
+            success = await self.post_to_twitter(original_text, media_path)
+            
+            if success:
+                logger.info("Successfully posted to Twitter from second channel")
+            else:
+                logger.warning("Failed to post to Twitter from second channel")
+                
+            # Clean up temporary file
+            if media_path and os.path.exists(media_path):
+                try:
+                    os.remove(media_path)
+                except Exception as e:
+                    logger.warning(f"Could not delete temp file: {str(e)}")
+                    
+        except Exception as e:
+            logger.error(f"Error handling second channel message for Twitter: {str(e)}")
+
+    def setup_handlers(self):
+        """Setup event handlers for userbot"""
+        # Add handler for twittervid_bot responses
+        @self.core.userbot.on(events.NewMessage(from_users=TWITTER_VID_BOT))
+        async def handle_twittervid_message(event):
+            await self.core._handle_twittervid_response(event)
+
+        # Add handler for second channel (Twitter posting)
+        if self.core.twitter_poster_enabled:
+            @self.core.userbot.on(events.NewMessage(chats=YOUR_SECOND_CHANNEL_ID))
+            async def handle_second_channel_message(event):
+                await self.handle_second_channel_message(event)
+            logger.info("Second channel handler added for Twitter posting")
