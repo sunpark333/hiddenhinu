@@ -48,13 +48,13 @@ class AICaptionEnhancer:
         - Use natural, conversational language
         - Avoid starting with words like "Breaking", "Alert", "News", etc.
         - Use minimal punctuation - avoid excessive commas, exclamations
-        - Use 1-2 relevant emojis maximum
+        - write 1-2 Paragraph with and space between Paragraphs
         - Keep it concise and impactful
         - Make it look like a normal social media post
         - Return ONLY the rewritten text, no explanations
         - DO NOT use hashtags like #AIEnhanced #Viral etc.
         - DO NOT mention it's enhanced or rewritten
-        - Make it flow naturally like human speech
+        - Make it flow naturally like human speech and use easy english 
         """
         
         return prompt
