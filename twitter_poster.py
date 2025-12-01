@@ -3,21 +3,21 @@ import os
 import re
 from tweepy import Client as TwitterClient, OAuth1UserHandler, API
 from tweepy.errors import TweepyException
-from telethon import events
-from config import YOUR_SECOND_CHANNEL_ID, TWITTER_VID_BOT, TWITTER_BEARER_TOKEN, TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET
+from config import TWITTER_BEARER_TOKEN, TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET
 
 logger = logging.getLogger(__name__)
 
 class TwitterPoster:
-    def __init__(self, core):
-        self.core = core
-        
+    def __init__(self):
+        self.twitter_poster_enabled = True
+        self.twitter_client = None
+
     async def initialize_twitter_client(self):
         """Initialize Twitter client"""
         try:
             if all([TWITTER_BEARER_TOKEN, TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET, 
                    TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET]):
-                self.core.twitter_client = TwitterClient(
+                self.twitter_client = TwitterClient(
                     bearer_token=TWITTER_BEARER_TOKEN,
                     consumer_key=TWITTER_CONSUMER_KEY,
                     consumer_secret=TWITTER_CONSUMER_SECRET,
@@ -55,7 +55,7 @@ class TwitterPoster:
     async def post_to_twitter(self, text, media_path=None):
         """Post content to Twitter"""
         try:
-            if not self.core.twitter_client or not self.core.twitter_poster_enabled:
+            if not self.twitter_client or not self.twitter_poster_enabled:
                 return False
 
             processed_text = self.process_text_for_twitter(text)
@@ -92,12 +92,12 @@ class TwitterPoster:
 
             # Post to Twitter
             if media_ids:
-                response = self.core.twitter_client.create_tweet(
+                response = self.twitter_client.create_tweet(
                     text=processed_text,
                     media_ids=media_ids
                 )
             else:
-                response = self.core.twitter_client.create_tweet(text=processed_text)
+                response = self.twitter_client.create_tweet(text=processed_text)
             
             logger.info(f"Tweet posted successfully! ID: {response.data['id']}")
             return True
@@ -109,10 +109,10 @@ class TwitterPoster:
             logger.error(f"Error posting to Twitter: {str(e)}")
             return False
 
-    async def handle_second_channel_message(self, event):
+    async def handle_second_channel_message(self, userbot, event, YOUR_SECOND_CHANNEL_ID):
         """Handle messages from second channel for Twitter posting"""
         try:
-            if not self.core.twitter_poster_enabled or not self.core.twitter_client:
+            if not self.twitter_poster_enabled or not self.twitter_client:
                 return
 
             message = event.message
@@ -124,7 +124,7 @@ class TwitterPoster:
             # Download media if present
             media_path = None
             if message.media:
-                media_path = await self.core.userbot.download_media(
+                media_path = await userbot.download_media(
                     message,
                     file=f"temp_twitter_media_{message.id}"
                 )
@@ -146,17 +146,3 @@ class TwitterPoster:
                     
         except Exception as e:
             logger.error(f"Error handling second channel message for Twitter: {str(e)}")
-
-    def setup_handlers(self):
-        """Setup event handlers for userbot"""
-        # Add handler for twittervid_bot responses
-        @self.core.userbot.on(events.NewMessage(from_users=TWITTER_VID_BOT))
-        async def handle_twittervid_message(event):
-            await self.core._handle_twittervid_response(event)
-
-        # Add handler for second channel (Twitter posting)
-        if self.core.twitter_poster_enabled:
-            @self.core.userbot.on(events.NewMessage(chats=YOUR_SECOND_CHANNEL_ID))
-            async def handle_second_channel_message(event):
-                await self.handle_second_channel_message(event)
-            logger.info("Second channel handler added for Twitter posting")
