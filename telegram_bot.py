@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from config import TELEGRAM_BOT_TOKEN, ADMIN_IDS
@@ -10,6 +11,7 @@ class TelegramBot:
     def __init__(self, twitter_bot: TwitterBot):
         self.twitter_bot = twitter_bot
         self.bot_app = None
+        self._polling_started = False
 
     def is_admin(self, user_id):
         """Check if user is admin"""
@@ -240,6 +242,10 @@ class TelegramBot:
     async def start_polling(self):
         """Start bot polling"""
         try:
+            if self._polling_started:
+                logger.warning("Polling already started, skipping...")
+                return
+                
             logger.info("Starting Telegram Bot...")
             self.bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -259,14 +265,25 @@ class TelegramBot:
             await self.bot_app.start()
             await self.bot_app.updater.start_polling()
             
+            self._polling_started = True
+            
+            # Keep the polling running
+            while self._polling_started:
+                await asyncio.sleep(1)
+                
         except Exception as e:
             logger.error(f"Error in polling: {e}")
+            self._polling_started = False
             raise
 
     async def shutdown(self):
         """Shutdown telegram bot"""
+        self._polling_started = False
         if self.bot_app:
             logger.info("Stopping bot application...")
-            await self.bot_app.updater.stop()
-            await self.bot_app.stop()
-            await self.bot_app.shutdown()
+            try:
+                await self.bot_app.updater.stop()
+                await self.bot_app.stop()
+                await self.bot_app.shutdown()
+            except Exception as e:
+                logger.error(f"Error stopping bot app: {e}")
