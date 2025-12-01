@@ -41,13 +41,9 @@ class MainBot:
             await self.twitter_poster.initialize_twitter_client()
             
             logger.info("Starting Telegram bot polling...")
-            # Start polling in background task
-            asyncio.create_task(self.telegram_bot.start_polling())
+            # Use run_polling instead of start_polling for better control
+            await self.telegram_bot.run_polling()
             
-            # Keep the application running
-            while not self._shutdown_flag:
-                await asyncio.sleep(1)
-                
         except Exception as e:
             logger.error(f"Error in run_async: {e}")
             raise
@@ -79,16 +75,6 @@ class MainBot:
                 
                 logger.info(f"Starting bot... (Attempt {retry_count + 1})")
                 loop.run_until_complete(self.run_async())
-                
-                # If we reach here, the bot is running successfully
-                logger.info("Bot is running successfully")
-                try:
-                    # Keep the main thread alive
-                    while not self._shutdown_flag:
-                        time.sleep(1)
-                except KeyboardInterrupt:
-                    logger.info("Received keyboard interrupt, shutting down...")
-                    break
                 
             except KeyboardInterrupt:
                 logger.info("Received keyboard interrupt, shutting down...")
