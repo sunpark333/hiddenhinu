@@ -2,16 +2,8 @@ import logging
 import asyncio
 import os
 import sys
-
-# Import configuration
-from config import (
-    TELEGRAM_BOT_TOKEN, API_ID, API_HASH, 
-    TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, 
-    YOUR_CHANNEL_ID, YOUR_SECOND_CHANNEL_ID, TIMEZONE
-)
-
-# Import the main bot class
-from twitter_client import TwitterBot
+from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, YOUR_SECOND_CHANNEL_ID, TIMEZONE
+from task import TwitterBot
 
 # Koyeb के लिए logging setup
 logging.basicConfig(
@@ -25,14 +17,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 if __name__ == '__main__':
-    logger.info("Starting Twitter Bot...")
-    
-    try:
-        # Create and run the bot
-        bot = TwitterBot()
-        bot.run()
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-    except Exception as e:
-        logger.error(f"Fatal error: {str(e)}")
-        sys.exit(1)
+    logger.info("Starting Twitter Bot on Koyeb...")
+    bot = TwitterBot()
+    bot.run()
