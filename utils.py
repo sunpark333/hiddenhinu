@@ -92,4 +92,42 @@ class BotUtils:
             second_channel = await self.twitter_bot.userbot.get_entity(YOUR_SECOND_CHANNEL_ID)
             logger.info(f"Verified access to second channel: {second_channel.title}")
         except Exception as e:
-            logger.error(f
+            logger.error(f"Channel access failed: {str(e)}")
+            raise
+    
+    async def start_polling(self):
+        """Start bot polling"""
+        try:
+            if self.twitter_bot._polling_started:
+                logger.warning("Polling already started, skipping...")
+                return
+                
+            logger.info("Starting Telegram Bot...")
+            self.twitter_bot.bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+            # Setup handlers
+            self.twitter_bot.telegram_handlers = TelegramHandlers(
+                self.twitter_bot.bot_app, 
+                self.twitter_bot
+            )
+
+            logger.info("Bot started successfully! Waiting for messages...")
+            
+            # Stop any existing webhook first
+            await self.twitter_bot.bot_app.bot.delete_webhook(drop_pending_updates=True)
+            await asyncio.sleep(2)
+            
+            await self.twitter_bot.bot_app.initialize()
+            await self.twitter_bot.bot_app.start()
+            await self.twitter_bot.bot_app.updater.start_polling()
+            
+            self.twitter_bot._polling_started = True
+            
+            # Keep the polling running
+            while not self.twitter_bot._shutdown_flag:
+                await asyncio.sleep(1)
+                
+        except Exception as e:
+            logger.error(f"Error in polling: {e}")
+            self.twitter_bot._polling_started = False
+            raise
