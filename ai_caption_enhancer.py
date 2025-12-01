@@ -27,7 +27,9 @@ class AICaptionEnhancer:
             enhanced_text = await self._call_perplexity_api(prompt)
             
             if enhanced_text and len(enhanced_text.strip()) > 20:
-                return enhanced_text.strip()
+                # Apply paragraph formatting
+                formatted_text = self._format_paragraphs(enhanced_text.strip())
+                return formatted_text
             else:
                 return original_text
                 
@@ -48,13 +50,23 @@ class AICaptionEnhancer:
         - Use natural, conversational language
         - Avoid starting with words like "Breaking", "Alert", "News", etc.
         - Use minimal punctuation - avoid excessive commas, exclamations
-        - write 1-2 Paragraph with and space between Paragraphs
+        - ALWAYS format the output into multiple clean paragraphs
+        - Insert exactly ONE blank line between each paragraph
+        - Each paragraph should be 2-4 lines maximum
         - Keep it concise and impactful
         - Make it look like a normal social media post
         - Return ONLY the rewritten text, no explanations
         - DO NOT use hashtags like #AIEnhanced #Viral etc.
         - DO NOT mention it's enhanced or rewritten
-        - Make it flow naturally like human speech and use easy english 
+        - Make it flow naturally like human speech and use easy english
+        - Example format:
+          This is the first paragraph of text.
+          It can be multiple lines but keep it short.
+          
+          This is the second paragraph with a blank line above.
+          Social media posts read better with spacing.
+          
+          Final paragraph if needed.
         """
         
         return prompt
@@ -73,14 +85,14 @@ class AICaptionEnhancer:
             "messages": [
                 {
                     "role": "system", 
-                    "content": "You are a social media user who writes engaging, natural posts. You rewrite text to make it more conversational and human-like. You never sound like AI. You avoid formal language and excessive punctuation. You return only the rewritten text without any explanations or labels."
+                    "content": "You are a social media user who writes engaging, natural posts. You rewrite text to make it more conversational and human-like. You always format output into multiple paragraphs with exactly one blank line between them. You never sound like AI. You avoid formal language and excessive punctuation. You return only the rewritten text without any explanations or labels."
                 },
                 {
                     "role": "user",
                     "content": prompt
                 }
             ],
-            "max_tokens": 120,
+            "max_tokens": 150,  # Slightly increased for paragraph formatting
             "temperature": 0.8  # Slightly higher temperature for more creative/natural output
         }
         
@@ -189,6 +201,43 @@ class AICaptionEnhancer:
                 text = ' '.join(words[1:])
         
         return text.strip()
+
+    def _format_paragraphs(self, text):
+        """
+        Ensure the text is formatted into clean paragraphs with single blank lines
+        """
+        if not text:
+            return text
+        
+        # Split by multiple newlines to identify existing paragraphs
+        paragraphs = [p.strip() for p in re.split(r'\n\s*\n+', text) if p.strip()]
+        
+        if len(paragraphs) <= 1:
+            # If no paragraphs detected, try to create them based on sentence structure
+            # Split by periods that are likely sentence endings
+            sentences = re.split(r'(?<=[.!?])\s+', text)
+            
+            if len(sentences) <= 3:
+                # Not enough sentences for multiple paragraphs
+                return text
+            
+            # Create 2-3 paragraphs
+            paragraphs = []
+            mid_point = len(sentences) // 2
+            
+            # First paragraph
+            paragraphs.append(' '.join(sentences[:mid_point]))
+            
+            # Second paragraph
+            paragraphs.append(' '.join(sentences[mid_point:]))
+        
+        # Join paragraphs with exactly one newline between them
+        formatted_text = '\n\n'.join(paragraphs)
+        
+        # Clean up any extra whitespace within paragraphs
+        formatted_text = re.sub(r'[ \t]+', ' ', formatted_text)
+        
+        return formatted_text
 
     def is_meaningful_text(self, text):
         """
