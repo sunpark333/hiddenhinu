@@ -1,3 +1,5 @@
+# file name: task(2).py
+# file content begin
 import logging
 import asyncio
 import pytz
@@ -14,6 +16,7 @@ from tweepy import Client as TwitterClient, OAuth1UserHandler, API
 from tweepy.errors import TweepyException
 from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, YOUR_SECOND_CHANNEL_ID, TIMEZONE, ADMIN_IDS, TWITTER_BEARER_TOKEN, TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET
 from ai_caption_enhancer import AICaptionEnhancer
+from video_watermark import VideoWatermark, check_ffmpeg_available
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,81 @@ class TwitterBot:
         # Twitter posting feature
         self.twitter_poster_enabled = True
         self.twitter_client = None
+        
+        # Video watermark feature
+        self.watermark_enabled = True
+        self.watermark_position = "bottom-right"
+        self.watermark_opacity = 0.7
+        self.watermark_processor = None
+        self.ffmpeg_available = check_ffmpeg_available()
+        
+        self._initialize_watermark_processor()
+
+    def _initialize_watermark_processor(self):
+        """Initialize video watermark processor"""
+        try:
+            if self.watermark_enabled:
+                self.watermark_processor = VideoWatermark(
+                    logo_path="channel_logo.png",
+                    position=self.watermark_position,
+                    opacity=self.watermark_opacity
+                )
+                
+                if not self.ffmpeg_available:
+                    logger.warning("FFmpeg not available! Video watermarking may not work properly.")
+                    logger.info("Install FFmpeg with: sudo apt-get install ffmpeg")
+                else:
+                    logger.info("Video watermark processor initialized successfully")
+            else:
+                logger.info("Video watermarking is disabled")
+        except Exception as e:
+            logger.error(f"Failed to initialize watermark processor: {str(e)}")
+            self.watermark_enabled = False
+
+    async def _add_watermark_to_media(self, media_path):
+        """
+        Add watermark to media file (video or image)
+        
+        Args:
+            media_path: Path to media file
+            
+        Returns:
+            Path to watermarked media file
+        """
+        if not self.watermark_enabled or not self.watermark_processor:
+            return media_path
+        
+        if not os.path.exists(media_path):
+            logger.error(f"Media file not found: {media_path}")
+            return media_path
+        
+        try:
+            # Check file extension
+            file_ext = os.path.splitext(media_path)[1].lower()
+            
+            if file_ext in ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.webm']:
+                # Video file
+                if self.ffmpeg_available:
+                    logger.info(f"Adding watermark to video: {media_path}")
+                    watermarked_path = self.watermark_processor.add_watermark_to_video(media_path)
+                    return watermarked_path
+                else:
+                    logger.warning("FFmpeg not available, skipping video watermark")
+                    return media_path
+                    
+            elif file_ext in ['.jpg', '.jpeg', '.png', '.bmp', '.gif']:
+                # Image file
+                logger.info(f"Adding watermark to image: {media_path}")
+                watermarked_path = self.watermark_processor.add_watermark_to_image(media_path)
+                return watermarked_path
+                
+            else:
+                logger.warning(f"Unsupported file format for watermarking: {file_ext}")
+                return media_path
+                
+        except Exception as e:
+            logger.error(f"Error adding watermark: {str(e)}")
+            return media_path
 
     async def initialize_twitter_client(self):
         """Initialize Twitter client"""
@@ -104,6 +182,11 @@ class TwitterBot:
             media_ids = []
             if media_path and os.path.exists(media_path):
                 try:
+                    # Add watermark before uploading to Twitter
+                    if self.watermark_enabled:
+                        logger.info("Adding watermark for Twitter post")
+                        media_path = await self._add_watermark_to_media(media_path)
+                    
                     # Upload media using v1.1 API
                     auth = OAuth1UserHandler(
                         TWITTER_CONSUMER_KEY,
@@ -231,7 +314,12 @@ class TwitterBot:
 
     async def health_check(self, request):
         """Health check endpoint for Koyeb"""
-        return web.Response(text="Bot is running!")
+        watermark_status = "✅ ENABLED" if self.watermark_enabled and self.ffmpeg_available else "❌ DISABLED"
+        return web.Response(
+            text=f"Bot is running!\n"
+                 f"Watermark Status: {watermark_status}\n"
+                 f"FFmpeg Available: {'✅ YES' if self.ffmpeg_available else '❌ NO'}"
+        )
 
     async def start_http_server(self):
         """Start HTTP server for health checks"""
@@ -359,7 +447,7 @@ class TwitterBot:
             logger.error(f"Error in handle_twittervid_message: {str(e)}")
 
     async def _process_received_video(self, event):
-        """Process received video and send to both channels with AI-enhanced caption for second channel"""
+        """Process received video and send to both channels with AI-enhanced caption and watermark for second channel"""
         try:
             original_caption = self.clean_text(event.message.text) if event.message.text else ""
 
@@ -370,14 +458,37 @@ class TwitterBot:
             second_channel_caption = await self._get_enhanced_caption(original_caption)
 
             # Function to send to a channel
-            async def send_to_channel(channel_id, caption_text):
+            async def send_to_channel(channel_id, caption_text, add_watermark=False):
                 if event.message.media:
-                    return await self.userbot.send_file(
+                    # Download media first
+                    temp_media_path = await self.userbot.download_media(
+                        event.message,
+                        file=f"temp_media_{event.message.id}"
+                    )
+                    
+                    # Add watermark if needed
+                    final_media_path = temp_media_path
+                    if add_watermark and self.watermark_enabled:
+                        logger.info(f"Adding watermark for channel: {channel_id}")
+                        final_media_path = await self._add_watermark_to_media(temp_media_path)
+                    
+                    # Send to channel
+                    sent_message = await self.userbot.send_file(
                         channel_id,
-                        file=event.message.media,
+                        file=final_media_path,
                         caption=caption_text,
                         schedule=scheduled_time if self.scheduled_mode or self.incremental_schedule_mode or self.fixed_interval_mode else None
                     )
+                    
+                    # Clean up temp files
+                    for temp_path in [temp_media_path, final_media_path]:
+                        if temp_path and os.path.exists(temp_path) and temp_path != event.message.media:
+                            try:
+                                os.remove(temp_path)
+                            except Exception as e:
+                                logger.warning(f"Could not delete temp file {temp_path}: {str(e)}")
+                    
+                    return sent_message
                 else:
                     return await self.userbot.send_message(
                         channel_id,
@@ -390,13 +501,14 @@ class TwitterBot:
             if self.scheduled_mode or self.incremental_schedule_mode or self.fixed_interval_mode:
                 scheduled_time = self._calculate_schedule_time()
 
-            # Send to first channel (original caption)
-            message1 = await send_to_channel(YOUR_CHANNEL_ID, first_channel_caption)
+            # Send to first channel (original caption, no watermark)
+            message1 = await send_to_channel(YOUR_CHANNEL_ID, first_channel_caption, add_watermark=False)
             
-            # Send to second channel (AI-enhanced caption)
-            message2 = await send_to_channel(YOUR_SECOND_CHANNEL_ID, second_channel_caption)
+            # Send to second channel (AI-enhanced caption, with watermark)
+            message2 = await send_to_channel(YOUR_SECOND_CHANNEL_ID, second_channel_caption, add_watermark=True)
 
             # Update counters and send success message
+            watermark_status = " with channel logo" if self.watermark_enabled else ""
             if self.scheduled_mode or self.incremental_schedule_mode or self.fixed_interval_mode:
                 self.scheduled_counter += 1
                 self.scheduled_messages.extend([message1.id, message2.id])
@@ -404,13 +516,15 @@ class TwitterBot:
                 if self.current_update and self.current_update.message:
                     await self.current_update.message.reply_text(
                         f"✅ Video successfully scheduled for {scheduled_time.strftime('%Y-%m-%d %H:%M')} IST in both channels!\n"
-                        f"📝 Second channel caption enhanced with AI."
+                        f"📝 Second channel caption enhanced with AI.\n"
+                        f"🖼️ Watermark added to second channel video{watermark_status}."
                     )
             else:
                 if self.current_update and self.current_update.message:
                     await self.current_update.message.reply_text(
-                        "✅ Video successfully sent to both channels!\n"
-                        "📝 Second channel caption enhanced with AI."
+                        f"✅ Video successfully sent to both channels!\n"
+                        f"📝 Second channel caption enhanced with AI.\n"
+                        f"🖼️ Watermark added to second channel video{watermark_status}."
                     )
 
             logger.info(f"Message sent to both channels: {YOUR_CHANNEL_ID} and {YOUR_SECOND_CHANNEL_ID}")
@@ -508,6 +622,8 @@ class TwitterBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         twitter_status = "✅ ENABLED" if self.twitter_poster_enabled and self.twitter_client else "❌ DISABLED"
+        watermark_status = "✅ ENABLED" if self.watermark_enabled else "❌ DISABLED"
+        ffmpeg_status = "✅ AVAILABLE" if self.ffmpeg_available else "❌ NOT AVAILABLE"
         
         await update.message.reply_text(
             "🤖 **Twitter Video Bot Started!**\n\n"
@@ -516,10 +632,82 @@ class TwitterBot:
             "• **1 hour** - Daily at 7 AM with 1-hour intervals\n"
             "• **now send** - Incremental scheduling (2h, 3h, 4h...)\n"
             "• **2 hour** - Fixed 2-hour intervals starting from 7 AM\n\n"
-            f"🐦 **Twitter Auto-Poster:** {twitter_status}\n\n"
+            f"🐦 **Twitter Auto-Poster:** {twitter_status}\n"
+            f"🖼️ **Video Watermark:** {watermark_status}\n"
+            f"🔧 **FFmpeg Status:** {ffmpeg_status}\n\n"
             "🎯 **Select a scheduling mode or send link directly:**",
             reply_markup=reply_markup
         )
+
+    async def watermark_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Watermark settings command"""
+        if not await self.admin_only(update, context):
+            return
+
+        if context.args:
+            action = context.args[0].lower()
+            
+            if action == 'on':
+                self.watermark_enabled = True
+                await update.message.reply_text("✅ Watermark enabled! Videos in second channel will have channel logo.")
+            elif action == 'off':
+                self.watermark_enabled = False
+                await update.message.reply_text("❌ Watermark disabled!")
+            elif action == 'position':
+                if len(context.args) > 1:
+                    position = context.args[1].lower()
+                    valid_positions = ['bottom-right', 'bottom-left', 'top-right', 'top-left']
+                    
+                    if position in valid_positions:
+                        self.watermark_position = position
+                        if self.watermark_processor:
+                            self.watermark_processor.position = position
+                        await update.message.reply_text(f"✅ Watermark position set to: {position}")
+                    else:
+                        await update.message.reply_text(
+                            "⚠️ Invalid position. Use one of:\n"
+                            "• bottom-right\n• bottom-left\n• top-right\n• top-left"
+                        )
+                else:
+                    await update.message.reply_text("Please specify position: /watermark position bottom-right")
+            elif action == 'opacity':
+                if len(context.args) > 1:
+                    try:
+                        opacity = float(context.args[1])
+                        if 0.0 <= opacity <= 1.0:
+                            self.watermark_opacity = opacity
+                            if self.watermark_processor:
+                                self.watermark_processor.opacity = opacity
+                            await update.message.reply_text(f"✅ Watermark opacity set to: {opacity}")
+                        else:
+                            await update.message.reply_text("⚠️ Opacity must be between 0.0 and 1.0")
+                    except ValueError:
+                        await update.message.reply_text("⚠️ Please provide a valid number for opacity (0.0 to 1.0)")
+                else:
+                    await update.message.reply_text("Please specify opacity: /watermark opacity 0.7")
+            else:
+                await update.message.reply_text(
+                    "❓ Unknown command. Available options:\n"
+                    "• /watermark on - Enable watermark\n"
+                    "• /watermark off - Disable watermark\n"
+                    "• /watermark position [pos] - Set position\n"
+                    "• /watermark opacity [value] - Set opacity (0.0-1.0)\n"
+                    "• /watermark status - Show current settings"
+                )
+        else:
+            # Show current status
+            status_text = (
+                f"🖼️ **Watermark Settings:**\n\n"
+                f"• **Status:** {'✅ ENABLED' if self.watermark_enabled else '❌ DISABLED'}\n"
+                f"• **Position:** {self.watermark_position}\n"
+                f"• **Opacity:** {self.watermark_opacity}\n"
+                f"• **FFmpeg:** {'✅ AVAILABLE' if self.ffmpeg_available else '❌ NOT AVAILABLE'}\n\n"
+                "Use commands:\n"
+                "• /watermark on/off\n"
+                "• /watermark position [bottom-right|bottom-left|top-right|top-left]\n"
+                "• /watermark opacity [0.0-1.0]"
+            )
+            await update.message.reply_text(status_text)
 
     async def twitter_poster_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Twitter poster को enable/disable करें"""
@@ -607,10 +795,12 @@ class TwitterBot:
         if first_schedule_time < now:
             first_schedule_time += timedelta(days=1)
 
+        watermark_status = "with channel logo " if self.watermark_enabled else ""
         response_text = (
             "📅 **1 Hour Mode Activated!**\n\n"
             f"⏰ First video: {first_schedule_time.strftime('%Y-%m-%d %H:%M')} IST\n"
-            f"🕐 Each new video: +1 hour interval\n\n"
+            f"🕐 Each new video: +1 hour interval\n"
+            f"🖼️ Second channel videos: AI caption + {watermark_status}\n\n"
             "❌ Use /endtask to stop scheduled posting."
         )
 
@@ -630,10 +820,12 @@ class TwitterBot:
         now = datetime.now(TIMEZONE)
         first_schedule_time = now + timedelta(hours=2)
 
+        watermark_status = "with channel logo " if self.watermark_enabled else ""
         response_text = (
             "⏱️ **Now Send Mode Activated!**\n\n"
             f"⏰ First video: {first_schedule_time.strftime('%Y-%m-%d %H:%M')} IST\n"
-            f"🕐 Next intervals: +2h, +3h, +4h...\n\n"
+            f"🕐 Next intervals: +2h, +3h, +4h...\n"
+            f"🖼️ Second channel videos: AI caption + {watermark_status}\n\n"
             "❌ Use /endtask to stop scheduled posting."
         )
 
@@ -658,10 +850,12 @@ class TwitterBot:
         second_schedule_time = first_schedule_time + timedelta(hours=2)
         third_schedule_time = first_schedule_time + timedelta(hours=4)
 
+        watermark_status = "with channel logo " if self.watermark_enabled else ""
         response_text = (
             "🕑 **2 Hour Mode Activated!**\n\n"
             f"⏰ Schedule starts at: 7:00 AM IST\n"
-            f"🕐 Fixed interval: Every 2 hours\n\n"
+            f"🕐 Fixed interval: Every 2 hours\n"
+            f"🖼️ Second channel videos: AI caption + {watermark_status}\n\n"
             f"📅 Example schedule:\n"
             f"• 1st post: {first_schedule_time.strftime('%H:%M')} IST\n"
             f"• 2nd post: {second_schedule_time.strftime('%H:%M')} IST\n"
@@ -721,8 +915,10 @@ class TwitterBot:
             self.quality_selected = False
             self.video_received = False
 
+            watermark_status = " with channel logo" if self.watermark_enabled else ""
             await message.reply_text(
-                "⏳ Processing link and downloading video..."
+                f"⏳ Processing link and downloading video...\n"
+                f"🖼️ Watermark{watermark_status} will be added to second channel."
             )
 
             await self.userbot.send_message(TWITTER_VID_BOT, text)
@@ -766,6 +962,7 @@ class TwitterBot:
             self.bot_app.add_handler(CommandHandler("task3", self.start_task3))
             self.bot_app.add_handler(CommandHandler("endtask", self.end_task))
             self.bot_app.add_handler(CommandHandler("twitter_poster", self.twitter_poster_command))
+            self.bot_app.add_handler(CommandHandler("watermark", self.watermark_command))
             self.bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_link))
             self.bot_app.add_handler(CallbackQueryHandler(self.button_handler))
 
@@ -883,3 +1080,4 @@ class TwitterBot:
 if __name__ == "__main__":
     bot = TwitterBot()
     bot.run()
+# file content end
