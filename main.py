@@ -1,22 +1,19 @@
 import logging
 import asyncio
-import os
 import sys
-from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, YOUR_SECOND_CHANNEL_ID, TIMEZONE
-from task import TwitterBot
+from bot_manager import BotManager
+from config import TELEGRAM_BOT_TOKEN
 
-# Koyeb के लिए logging setup
+# Koyeb logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
+    handlers=[logging.StreamHandler(sys.stdout)]
 )
 
 logger = logging.getLogger(__name__)
 
 if __name__ == '__main__':
-    logger.info("Starting Twitter Bot on Koyeb...")
-    bot = TwitterBot()
+    logger.info("🚀 Twitter Bot Starting...")
+    bot = BotManager()
     bot.run()
