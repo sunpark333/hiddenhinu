@@ -8,7 +8,7 @@ from telegram.ext import Application
 from config import (
     TELEGRAM_BOT_TOKEN, API_ID, API_HASH, 
     TELEGRAM_SESSION_STRING, YOUR_CHANNEL_ID,
-    YOUR_SECOND_CHANNEL_ID
+    YOUR_SECOND_CHANNEL_ID, TWITTER_VID_BOT
 )
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class BotUtils:
     def _setup_userbot_handlers(self):
         """Setup userbot event handlers"""
         
-        @self.twitter_bot.userbot.on(events.NewMessage(from_users=self.twitter_bot.config.TWITTER_VID_BOT))
+        @self.twitter_bot.userbot.on(events.NewMessage(from_users=TWITTER_VID_BOT))
         async def handle_twittervid_message(event):
             await self.twitter_bot.video_processor.handle_twittervid_response(event)
 
@@ -106,6 +106,7 @@ class BotUtils:
             self.twitter_bot.bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
             # Setup handlers
+            from telegram_handlers import TelegramHandlers
             self.twitter_bot.telegram_handlers = TelegramHandlers(
                 self.twitter_bot.bot_app, 
                 self.twitter_bot
