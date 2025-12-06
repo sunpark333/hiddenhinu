@@ -1,8 +1,6 @@
 """
-Quiz Generator - AI-powered quiz creation and posting
-Generate 1 question as Telegram Poll (UPDATED VERSION)
-Questions are detailed, interesting, and have 4 options only
-No default quiz - AI required for all questions
+Quiz Generator - FIXED VERSION
+AI API error handling improved
 """
 
 import logging
@@ -117,7 +115,7 @@ class QuizGenerator:
             question_data = await self._generate_quiz_question(topic)
 
             if not question_data:
-                error_msg = "❌ Failed to generate question. Please try again."
+                error_msg = "❌ Failed to generate question. AI might be unavailable. Please try again later."
                 if hasattr(message_obj, 'edit_text'):
                     await message_obj.edit_text(error_msg)
                 elif hasattr(message_obj, 'reply_text'):
@@ -176,6 +174,8 @@ class QuizGenerator:
         try:
             prompt = self._create_quiz_prompt(topic)
 
+            logger.info(f"Prompt: {prompt[:100]}...")
+
             # Use AI enhancer to generate question
             question_content = await self.ai_enhancer.enhance_caption(prompt)
 
@@ -183,8 +183,16 @@ class QuizGenerator:
                 logger.warning("AI returned empty question content")
                 return None
 
+            logger.info(f"AI Response: {question_content[:200]}...")
+
             # Parse question from AI response
             question_data = self._parse_question_response(question_content, topic)
+
+            logger.info(f"Parsed question: {question_data}")
+            
+            if not question_data:
+                logger.error("Failed to parse question data")
+                return None
 
             logger.info(f"Generated question for topic: {topic}")
             return question_data
@@ -197,59 +205,58 @@ class QuizGenerator:
         """Create AI prompt for question generation - DETAILED & INTERESTING"""
         prompts = {
             "ramayan": (
-                "Generate 1 detailed and interesting quiz question about Ramayan in Hindi and English. "
-                "The question should be thought-provoking and test deep knowledge. "
-                "Format: Q) Question text (in Hindi and English)\n"
-                "A) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
-                "Requirements:\n"
-                "- Question should be 1-2 sentences, detailed and interesting\n"
-                "- Exactly 4 options (A, B, C, D) - no more, no less\n"
-                "- Options should be plausible and test real knowledge\n"
-                "- Include both Hindi and English in the question\n"
-                "- Topics: राम की यात्रा, सीता का किस्सा, लंका विजय, नैतिक संदेश, महत्वपूर्ण पात्र"
+                "Generate 1 detailed and interesting Hindi/English quiz question about Ramayan. "
+                "Question should be thought-provoking and test deep knowledge.\n\n"
+                "FORMAT MUST BE:\n"
+                "Q) [Question in Hindi and English]\n"
+                "A) [Option 1]\n"
+                "B) [Option 2]\n"
+                "C) [Option 3]\n"
+                "D) [Correct Answer]\n"
+                "Correct: D\n\n"
+                "Topics: राम की यात्रा, सीता, लंका विजय, नैतिक संदेश, पात्र"
             ),
 
             "mahabharata": (
-                "Generate 1 detailed and interesting quiz question about Mahabharata in Hindi and English. "
-                "The question should be thought-provoking and test deep knowledge. "
-                "Format: Q) Question text (in Hindi and English)\n"
-                "A) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
-                "Requirements:\n"
-                "- Question should be 1-2 sentences, detailed and interesting\n"
-                "- Exactly 4 options (A, B, C, D) - no more, no less\n"
-                "- Options should be plausible and test real knowledge\n"
-                "- Include both Hindi and English in the question\n"
-                "- Topics: पांडव-कौरव संघर्ष, कुरुक्षेत्र युद्ध, कृष्ण की भूमिका, धर्मशास्त्र का ज्ञान"
+                "Generate 1 detailed and interesting Hindi/English quiz question about Mahabharata. "
+                "Question should be thought-provoking and test deep knowledge.\n\n"
+                "FORMAT MUST BE:\n"
+                "Q) [Question in Hindi and English]\n"
+                "A) [Option 1]\n"
+                "B) [Option 2]\n"
+                "C) [Option 3]\n"
+                "D) [Correct Answer]\n"
+                "Correct: D\n\n"
+                "Topics: पांडव-कौरव, कुरुक्षेत्र, कृष्ण, धर्मशास्त्र"
             ),
 
             "mythology": (
-                "Generate 1 detailed and interesting quiz question about Hindu Mythology in Hindi and English. "
-                "The question should be thought-provoking and test deep knowledge. "
-                "Format: Q) Question text (in Hindi and English)\n"
-                "A) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
-                "Requirements:\n"
-                "- Question should be 1-2 sentences, detailed and interesting\n"
-                "- Exactly 4 options (A, B, C, D) - no more, no less\n"
-                "- Options should be plausible and test real knowledge\n"
-                "- Include both Hindi and English in the question\n"
-                "- Topics: देवता, असुर, पौराणिक कथाएं, देवताओं की शक्तियाँ, त्रिलोक"
+                "Generate 1 detailed and interesting Hindi/English quiz question about Hindu Mythology. "
+                "Question should be thought-provoking and test deep knowledge.\n\n"
+                "FORMAT MUST BE:\n"
+                "Q) [Question in Hindi and English]\n"
+                "A) [Option 1]\n"
+                "B) [Option 2]\n"
+                "C) [Option 3]\n"
+                "D) [Correct Answer]\n"
+                "Correct: D\n\n"
+                "Topics: देवता, असुर, देवी, कथाएं, शक्तियाँ"
             ),
 
             "vedas": (
-                "Generate 1 detailed and interesting quiz question about Vedas in Hindi and English. "
-                "The question should be thought-provoking and test deep knowledge. "
-                "Format: Q) Question text (in Hindi and English)\n"
-                "A) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
-                "Requirements:\n"
-                "- Question should be 1-2 sentences, detailed and interesting\n"
-                "- Exactly 4 options (A, B, C, D) - no more, no less\n"
-                "- Options should be plausible and test real knowledge\n"
-                "- Include both Hindi and English in the question\n"
-                "- Topics: चार वेद, वेदों का ज्ञान, ऋषियों की शिक्षाएं, उपनिषद, दर्शन"
+                "Generate 1 detailed and interesting Hindi/English quiz question about Vedas. "
+                "Question should be thought-provoking and test deep knowledge.\n\n"
+                "FORMAT MUST BE:\n"
+                "Q) [Question in Hindi and English]\n"
+                "A) [Option 1]\n"
+                "B) [Option 2]\n"
+                "C) [Option 3]\n"
+                "D) [Correct Answer]\n"
+                "Correct: D\n\n"
+                "Topics: वेद, उपनिषद, ऋषि, ज्ञान, दर्शन"
             )
         }
 
-        # Default prompt if topic not found
         default_prompt = prompts.get(topic, prompts["mythology"])
         return default_prompt
 
@@ -263,43 +270,55 @@ class QuizGenerator:
             Dictionary with question data
         """
         try:
-            lines = response.strip().split('\n')
+            lines = [l.strip() for l in response.strip().split('\n') if l.strip()]
+            
+            logger.info(f"Parsing {len(lines)} lines")
             
             question_text = None
             options = []
             correct_answer = None
 
             for i, line in enumerate(lines):
-                line = line.strip()
+                logger.debug(f"Line {i}: {line[:50]}")
                 
                 # Find question (starts with Q or Q))
-                if line and (line.startswith('Q)') or (line.startswith('Q ') and i == 0)):
-                    question_text = line.replace('Q)', '').replace('Q ', '').strip()
+                if line and (line.startswith('Q)') or line.startswith('Q ')):
+                    question_text = line[2:].strip() if len(line) > 2 else ""
+                    if not question_text and i + 1 < len(lines):
+                        question_text = lines[i + 1]
+                    logger.debug(f"Found question: {question_text[:80]}")
                 
                 # Find options (A, B, C, D)
                 elif line.startswith(('A)', 'B)', 'C)', 'D)')):
                     option_text = line[2:].strip() if len(line) > 2 else line[1:].strip()
-                    if option_text:
+                    if option_text and len(options) < 4:
                         options.append(option_text)
+                        logger.debug(f"Found option: {option_text[:50]}")
                 
                 # Find correct answer
-                elif 'Correct' in line or 'सही' in line or 'correct' in line.lower():
+                elif 'Correct' in line or 'सही' in line:
                     if ':' in line:
                         answer_part = line.split(':')[1].strip()
                         correct_answer = answer_part.replace(')', '').strip().upper()
+                        logger.debug(f"Found correct answer: {correct_answer}")
 
             # Validate question has exactly 4 options
-            if len(options) != 4:
-                logger.warning(f"Question has {len(options)} options, padding/trimming to 4")
-                options = options[:4] if len(options) > 4 else options + ["Option"] * (4 - len(options))
+            if len(options) < 4:
+                logger.warning(f"Question has {len(options)} options, filling to 4")
+                while len(options) < 4:
+                    options.append("Option")
+            elif len(options) > 4:
+                logger.warning(f"Question has {len(options)} options, trimming to 4")
+                options = options[:4]
 
-            if not question_text:
-                question_text = "No question text found"
+            if not question_text or question_text == "Option":
+                logger.error("No valid question text found")
+                return None
 
             if not correct_answer or correct_answer not in ['A', 'B', 'C', 'D']:
                 correct_answer = 'A'
 
-            return {
+            result = {
                 'topic': topic,
                 'question': question_text,
                 'options': options,
@@ -307,6 +326,9 @@ class QuizGenerator:
                 'created_at': datetime.now(TIMEZONE),
                 'posted': False
             }
+            
+            logger.info(f"Parsed result: {result}")
+            return result
 
         except Exception as e:
             logger.error(f"Error parsing question: {str(e)}")
@@ -420,24 +442,17 @@ class QuizGenerator:
                 logger.error("Userbot not connected")
                 return
 
-            # Get channel entity
-            channel = await self.bot.userbot.get_entity(YOUR_CHANNEL_ID)
+            # Get channel entity using integer ID
+            try:
+                channel = await self.bot.userbot.get_entity(int(YOUR_CHANNEL_ID))
+            except:
+                channel = YOUR_CHANNEL_ID
 
-            # Create poll with 4 options
+            # Create poll message
             question_text = question_data['question']
             options = question_data['options']
-            correct_option = ord(question_data['correct']) - ord('A')  # Convert A->0, B->1, etc
+            correct_option = ord(question_data['correct']) - ord('A')
 
-            # Send poll to channel
-            await self.bot.userbot.send_message(
-                channel,
-                question_text,
-                buttons=[
-                    options
-                ] if len(options) == 4 else None
-            )
-
-            # Send poll with correct answer highlighted
             poll_message = (
                 f"🎯 **{question_data['topic'].title()} Question**\n\n"
                 f"❓ {question_text}\n\n"
@@ -448,7 +463,7 @@ class QuizGenerator:
                 f"💡 सही उत्तर: {question_data['correct']}"
             )
 
-            # Send as formatted message
+            # Send message to channel
             await self.bot.userbot.send_message(channel, poll_message)
 
             logger.info(f"Question posted to channel: {question_data['topic']}")
