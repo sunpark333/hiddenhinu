@@ -1,8 +1,10 @@
 import logging
 import asyncio
 import re
+import os
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
+from telethon.tl.types import MessageMediaWebPage
 from config import API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, YOUR_SECOND_CHANNEL_ID
 from ai_caption_enhancer import AICaptionEnhancer
 
@@ -16,9 +18,11 @@ class UserBotManager:
         self.current_update = None
         self.quality_selected = False
         self.video_received = False
-        self.quality_selection_timeout = 60
+        self.quality_selection_timeout = 90  # Increased timeout
         self.last_processed_message_id = None
         self.ai_enhancer = AICaptionEnhancer()
+        self.video_download_attempts = 0
+        self.max_download_attempts = 3
 
     async def initialize(self):
         """Initialize Telegram userbot with string session"""
@@ -29,7 +33,8 @@ class UserBotManager:
             self.userbot = TelegramClient(
                 session=session,
                 api_id=int(API_ID),
-                api_hash=API_HASH
+                api_hash=API_HASH,
+                connection_retries=5
             )
 
             await self.userbot.start()
@@ -69,6 +74,7 @@ class UserBotManager:
             self.waiting_for_video = True
             self.quality_selected = False
             self.video_received = False
+            self.video_download_attempts = 0
 
             clean_text = self.clean_text(link_text)
             
@@ -79,11 +85,11 @@ class UserBotManager:
 
             start_time = asyncio.get_event_loop().time()
             while (asyncio.get_event_loop().time() - start_time) < self.quality_selection_timeout:
-                if self.quality_selected or self.video_received:
+                if self.video_received:
                     break
                 await asyncio.sleep(2)
 
-            if not self.quality_selected and not self.video_received:
+            if not self.video_received:
                 await update.message.reply_text("⚠️ Timeout waiting for video processing. Please try again.")
                 self._reset_flags()
                 return False
@@ -104,41 +110,88 @@ class UserBotManager:
             self.last_processed_message_id = event.message.id
 
             if self.waiting_for_video and self.current_update:
-                await asyncio.sleep(3)
+                await asyncio.sleep(2)  # Reduced sleep time
                 
                 message_text = event.message.text or ""
                 logger.info(f"Received message from twittervid_bot: {message_text[:100]}...")
+
+                # Check if message contains video
+                has_video = await self._check_if_has_video(event)
+                has_media = bool(event.message.media) and not isinstance(event.message.media, MessageMediaWebPage)
 
                 # Delete previous messages from twittervid_bot to keep chat clean
                 try:
                     async for old_msg in self.userbot.iter_messages(TWITTER_VID_BOT, limit=5):
                         if old_msg.id < event.message.id:
                             await old_msg.delete()
-                            await asyncio.sleep(1)
+                            await asyncio.sleep(0.5)
                 except Exception as e:
                     logger.warning(f"Could not delete old messages: {str(e)}")
 
                 if "Select Video Quality" in message_text and not self.quality_selected:
                     logger.info("Quality selection detected")
                     await self._handle_quality_selection(event, message_text)
+                    return
 
-                has_media = bool(event.message.media)
-                is_final_message = any(word in message_text for word in ['Download', 'Ready', 'Here', 'Quality'])
-
-                if (has_media or is_final_message) and self.quality_selected:
+                # Check if we have actual video (not webpage)
+                if has_video or has_media:
+                    logger.info(f"Video detected! Type: {type(event.message.media)}")
                     await self._process_received_video(event)
+                else:
+                    # Wait for video if we have quality selected
+                    if self.quality_selected and not self.video_received:
+                        self.video_download_attempts += 1
+                        logger.info(f"Waiting for video... Attempt {self.video_download_attempts}")
+                        
+                        if self.video_download_attempts >= self.max_download_attempts:
+                            logger.warning("Max download attempts reached, sending text only")
+                            await self._send_as_text_only(event)
+                            return
+                        
+                        # Wait and check again
+                        await asyncio.sleep(5)
 
         except Exception as e:
             logger.error(f"Error in handle_twittervid_message: {str(e)}")
+
+    async def _check_if_has_video(self, event):
+        """Check if message actually contains video (not webpage)"""
+        try:
+            if not event.message.media:
+                return False
+                
+            # Check if it's a webpage (which we can't use)
+            if isinstance(event.message.media, MessageMediaWebPage):
+                logger.warning("Received MessageMediaWebPage instead of video")
+                return False
+                
+            # Check for video attributes
+            if hasattr(event.message.media, 'video'):
+                return True
+            if hasattr(event.message.media, 'document'):
+                doc = event.message.media.document
+                if hasattr(doc, 'mime_type'):
+                    return doc.mime_type.startswith('video/')
+                    
+            # Try to check by file name
+            if hasattr(event.message, 'file') and event.message.file:
+                file_name = event.message.file.name or ''
+                return any(ext in file_name.lower() for ext in ['.mp4', '.mov', '.avi', '.mkv', '.webm'])
+                
+            return False
+        except Exception as e:
+            logger.error(f"Error checking for video: {str(e)}")
+            return False
 
     async def _handle_quality_selection(self, event, message_text):
         """Handle video quality selection"""
         try:
             buttons = await event.message.get_buttons()
             if buttons:
+                # Try to find HD quality first
                 for row in buttons:
                     for button in row:
-                        if any(q in button.text for q in ['720', 'HD', 'High', '1080']):
+                        if any(q in button.text.lower() for q in ['1080', '720', 'hd', 'high']):
                             await button.click()
                             quality = button.text
                             logger.info(f"Selected quality: {quality}")
@@ -149,6 +202,7 @@ class UserBotManager:
                             self.quality_selected = True
                             return
 
+                # If no HD quality found, select first available
                 if buttons[0]:
                     await buttons[0][0].click()
                     quality = buttons[0][0].text
@@ -158,7 +212,6 @@ class UserBotManager:
                             f"✅ Video is being downloaded in {quality} quality..."
                         )
                     self.quality_selected = True
-                    return
 
         except Exception as e:
             logger.error(f"Error in quality selection: {str(e)}")
@@ -167,6 +220,12 @@ class UserBotManager:
     async def _process_received_video(self, event):
         """Process received video and send to both channels"""
         try:
+            # First check if it's actually a video
+            if isinstance(event.message.media, MessageMediaWebPage):
+                logger.warning("Cannot process webpage as video")
+                await self._send_as_text_only(event)
+                return
+
             original_caption = self.clean_text(event.message.text) if event.message.text else ""
 
             # Prepare captions for both channels
@@ -178,57 +237,146 @@ class UserBotManager:
             # Calculate schedule time if in scheduled mode
             scheduled_time = await self.bot.scheduler.get_next_schedule_time()
 
-            # Send to first channel
-            message1 = await self._send_to_channel(YOUR_CHANNEL_ID, event.message, first_channel_caption, scheduled_time)
-            
-            # Send to second channel
-            message2 = await self._send_to_channel(YOUR_SECOND_CHANNEL_ID, event.message, second_channel_caption, scheduled_time)
+            # Try to send video
+            try:
+                # Send to first channel
+                message1 = await self._send_to_channel(YOUR_CHANNEL_ID, event.message, first_channel_caption, scheduled_time)
+                
+                # Send to second channel
+                message2 = await self._send_to_channel(YOUR_SECOND_CHANNEL_ID, event.message, second_channel_caption, scheduled_time)
 
-            # Update scheduler counter
-            if scheduled_time:
-                await self.bot.scheduler.increment_counter()
+                # Update scheduler counter
+                if scheduled_time:
+                    await self.bot.scheduler.increment_counter()
 
-            # Send success message
-            await self._send_success_message(scheduled_time)
+                # Send success message
+                await self._send_success_message(scheduled_time, is_video=True)
 
-            logger.info(f"Message sent to both channels: {YOUR_CHANNEL_ID} and {YOUR_SECOND_CHANNEL_ID}")
-            self._reset_flags()
+                logger.info(f"Video sent to both channels: {YOUR_CHANNEL_ID} and {YOUR_SECOND_CHANNEL_ID}")
+                self.video_received = True
+                
+            except Exception as e:
+                logger.error(f"Error sending video: {str(e)}")
+                # Fallback to text only
+                await self._send_as_text_only(event)
 
         except Exception as e:
-            error_msg = f"❌ Error sending video to channels: {str(e)}"
+            error_msg = f"❌ Error processing video: {str(e)}"
             logger.error(error_msg)
+            # Try to send error message
+            try:
+                if self.current_update and self.current_update.message:
+                    await self.current_update.message.reply_text(error_msg)
+            except:
+                pass
+            self._reset_flags()
+
+    async def _send_as_text_only(self, event):
+        """Send message as text only (fallback when video not available)"""
+        try:
+            original_caption = self.clean_text(event.message.text) if event.message.text else "Video content from Twitter"
+            
+            first_channel_caption = f"📹 Video Content\n\n{original_caption}\n\n"
+            second_channel_caption = await self._get_enhanced_caption(original_caption)
+            
+            scheduled_time = await self.bot.scheduler.get_next_schedule_time()
+            
+            # Send text only messages
+            message1 = await self.userbot.send_message(
+                YOUR_CHANNEL_ID,
+                first_channel_caption,
+                schedule=scheduled_time if scheduled_time else None
+            )
+            
+            message2 = await self.userbot.send_message(
+                YOUR_SECOND_CHANNEL_ID,
+                second_channel_caption,
+                schedule=scheduled_time if scheduled_time else None
+            )
+            
+            if scheduled_time:
+                await self.bot.scheduler.increment_counter()
+            
+            await self._send_success_message(scheduled_time, is_video=False)
+            
+            logger.info(f"Text-only message sent to both channels")
+            self.video_received = True
+            
+        except Exception as e:
+            logger.error(f"Error sending text-only message: {str(e)}")
             if self.current_update and self.current_update.message:
-                await self.current_update.message.reply_text(error_msg)
+                await self.current_update.message.reply_text("❌ Failed to process video. Please try another link.")
+        finally:
             self._reset_flags()
 
     async def _send_to_channel(self, channel_id, message, caption, scheduled_time):
-        """Send message to channel"""
-        if message.media:
-            return await self.userbot.send_file(
-                channel_id,
-                file=message.media,
-                caption=caption,
-                schedule=scheduled_time if scheduled_time else None
-            )
-        else:
+        """Send message to channel with proper media handling"""
+        try:
+            # Check if media is actually a video (not webpage)
+            if message.media and not isinstance(message.media, MessageMediaWebPage):
+                # Download media first to verify it's a video
+                try:
+                    temp_path = f"temp_video_{message.id}.mp4"
+                    downloaded_path = await self.userbot.download_media(
+                        message,
+                        file=temp_path
+                    )
+                    
+                    if downloaded_path and os.path.exists(downloaded_path):
+                        # Send the downloaded file
+                        result = await self.userbot.send_file(
+                            channel_id,
+                            downloaded_path,
+                            caption=caption,
+                            schedule=scheduled_time if scheduled_time else None
+                        )
+                        
+                        # Clean up temp file
+                        try:
+                            os.remove(downloaded_path)
+                        except:
+                            pass
+                        
+                        return result
+                except Exception as e:
+                    logger.warning(f"Could not download video: {str(e)}")
+                    # Fallback to sending as message
+                    return await self.userbot.send_message(
+                        channel_id,
+                        caption or "📹 Video Content",
+                        schedule=scheduled_time if scheduled_time else None
+                    )
+            else:
+                # Send as text message
+                return await self.userbot.send_message(
+                    channel_id,
+                    caption or "📹 Video Content",
+                    schedule=scheduled_time if scheduled_time else None
+                )
+                
+        except Exception as e:
+            logger.error(f"Error in _send_to_channel: {str(e)}")
+            # Ultimate fallback
             return await self.userbot.send_message(
                 channel_id,
                 caption or "📹 Video Content",
                 schedule=scheduled_time if scheduled_time else None
             )
 
-    async def _send_success_message(self, scheduled_time):
+    async def _send_success_message(self, scheduled_time, is_video=True):
         """Send success message to user"""
         if self.current_update and self.current_update.message:
+            content_type = "Video" if is_video else "Content"
+            
             if scheduled_time:
                 await self.current_update.message.reply_text(
-                    f"✅ Video successfully scheduled for {scheduled_time.strftime('%Y-%m-%d %H:%M')} IST in both channels!\n"
+                    f"✅ {content_type} successfully scheduled for {scheduled_time.strftime('%Y-%m-%d %H:%M')} IST in both channels!\n"
                     f"📝 Second channel caption enhanced with AI."
                 )
             else:
                 await self.current_update.message.reply_text(
-                    "✅ Video successfully sent to both channels!\n"
-                    "📝 Second channel caption enhanced with AI."
+                    f"✅ {content_type} successfully sent to both channels!\n"
+                    f"📝 Second channel caption enhanced with AI."
                 )
 
     async def _get_enhanced_caption(self, original_caption):
@@ -263,9 +411,9 @@ class UserBotManager:
             # Get message text
             original_text = message.text or message.caption or ""
             
-            # Download media if present
+            # Download media if present and not webpage
             media_path = None
-            if message.media:
+            if message.media and not isinstance(message.media, MessageMediaWebPage):
                 media_path = await self.userbot.download_media(
                     message,
                     file=f"temp_twitter_media_{message.id}"
@@ -280,8 +428,7 @@ class UserBotManager:
                 logger.warning("Failed to post to Twitter from second channel")
                 
             # Clean up temporary file
-            if media_path:
-                import os
+            if media_path and os.path.exists(media_path):
                 try:
                     os.remove(media_path)
                 except Exception as e:
@@ -312,6 +459,7 @@ class UserBotManager:
         self.waiting_for_video = False
         self.current_update = None
         self.quality_selected = False
+        self.video_download_attempts = 0
 
     async def shutdown(self):
         """Shutdown userbot"""
