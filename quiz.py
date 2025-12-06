@@ -1,6 +1,8 @@
 """
 Quiz Generator - AI-powered quiz creation and posting
-Generates quizzes on topics like Ramayan and Mahabharata
+Generate 1 question as Telegram Poll (UPDATED VERSION)
+Questions are detailed, interesting, and have 4 options only
+No default quiz - AI required for all questions
 """
 
 import logging
@@ -9,19 +11,17 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telethon.tl.types import TypeInputPeer
-
 from config import YOUR_CHANNEL_ID, TIMEZONE, ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
 
 class QuizGenerator:
-    """Generate and post quizzes to Telegram channels"""
-    
+    """Generate and post quizzes to Telegram channels as polls"""
+
     def __init__(self, bot, ai_enhancer):
         """
         Initialize quiz generator
-        
         Args:
             bot: TwitterBot instance
             ai_enhancer: AI caption enhancer instance
@@ -30,18 +30,19 @@ class QuizGenerator:
         self.ai_enhancer = ai_enhancer
         self.quiz_mode = False
         self.quiz_topic = None
-        self.current_quiz = None
+        self.current_question = None
         self.quiz_scheduled = False
 
     async def quiz_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
         /quiz command - Start quiz generation
-        Usage: /quiz <topic>
+        Usage: /quiz
         Examples: /quiz ramayan, /quiz mahabharata
         """
         if not await self.bot.handlers.admin_only(update, context):
             return
 
+        # Show topic selection if no args
         if not context.args or len(context.args) == 0:
             keyboard = [
                 [
@@ -55,19 +56,20 @@ class QuizGenerator:
             ]
 
             reply_markup = InlineKeyboardMarkup(keyboard)
-
             await update.message.reply_text(
                 "🎯 **Quiz Generator**\n\n"
-                "📖 Select a topic to generate AI-powered quiz:\n\n"
+                "📖 Select a topic to generate AI-powered quiz question:\n\n"
                 "• **Ramayan** - भगवान राम की गाथा\n"
                 "• **Mahabharata** - महाकाव्य की कहानियाँ\n"
                 "• **Hindu Mythology** - हिंदू पौराणिक कथाएं\n"
                 "• **Vedas** - वेदों का ज्ञान\n\n"
-                "📋 या command से use करो: `/quiz <topic>`",
-                reply_markup=reply_markup
+                "📋 या command से use करो: `/quiz ramayan`",
+                reply_markup=reply_markup,
+                parse_mode="Markdown"
             )
             return
 
+        # If topic provided in command
         topic = ' '.join(context.args).lower()
         await self._start_quiz_generation(update, context, topic)
 
@@ -93,36 +95,38 @@ class QuizGenerator:
                 await update.edit_message_text(
                     f"🎯 **Quiz Generator Started**\n\n"
                     f"📖 Topic: **{topic.title()}**\n"
-                    f"🤖 Generating quiz with AI...\n\n"
-                    f"⏳ Please wait..."
+                    f"🤖 Generating question with AI...\n\n"
+                    f"⏳ Please wait...",
+                    parse_mode="Markdown"
                 )
                 message_obj = update
             else:
                 await update.message.reply_text(
                     f"🎯 **Quiz Generator Started**\n\n"
                     f"📖 Topic: **{topic.title()}**\n"
-                    f"🤖 Generating quiz with AI...\n\n"
-                    f"⏳ Please wait..."
+                    f"🤖 Generating question with AI...\n\n"
+                    f"⏳ Please wait...",
+                    parse_mode="Markdown"
                 )
                 message_obj = update.message
 
             self.quiz_topic = topic
             self.quiz_mode = True
 
-            # Generate quiz questions using AI
-            quiz_data = await self._generate_quiz_questions(topic)
+            # Generate single question using AI
+            question_data = await self._generate_quiz_question(topic)
 
-            if not quiz_data:
-                error_msg = "❌ Failed to generate quiz. Please try again."
+            if not question_data:
+                error_msg = "❌ Failed to generate question. Please try again."
                 if hasattr(message_obj, 'edit_text'):
                     await message_obj.edit_text(error_msg)
                 elif hasattr(message_obj, 'reply_text'):
                     await message_obj.reply_text(error_msg)
                 return
 
-            self.current_quiz = quiz_data
+            self.current_question = question_data
 
-            # Show scheduling options
+            # Show posting options
             keyboard = [
                 [
                     InlineKeyboardButton("📤 Post Now", callback_data="quiz_post_now"),
@@ -134,297 +138,230 @@ class QuizGenerator:
             ]
 
             reply_markup = InlineKeyboardMarkup(keyboard)
-
-            quiz_preview = self._format_quiz_preview(quiz_data)
+            question_preview = self._format_question_preview(question_data)
 
             if hasattr(message_obj, 'edit_text'):
                 await message_obj.edit_text(
-                    f"✅ **Quiz Generated!**\n\n"
-                    f"{quiz_preview}\n\n"
+                    f"✅ **Question Generated!**\n\n"
+                    f"{question_preview}\n\n"
                     f"🎯 Select action:",
-                    reply_markup=reply_markup
+                    reply_markup=reply_markup,
+                    parse_mode="Markdown"
                 )
             elif hasattr(message_obj, 'reply_text'):
                 await message_obj.reply_text(
-                    f"✅ **Quiz Generated!**\n\n"
-                    f"{quiz_preview}\n\n"
+                    f"✅ **Question Generated!**\n\n"
+                    f"{question_preview}\n\n"
                     f"🎯 Select action:",
-                    reply_markup=reply_markup
+                    reply_markup=reply_markup,
+                    parse_mode="Markdown"
                 )
 
         except Exception as e:
             logger.error(f"Error in quiz generation: {str(e)}")
-            error_msg = f"❌ Error generating quiz: {str(e)}"
-            
+            error_msg = f"❌ Error generating question: {str(e)}"
             if hasattr(update, 'callback_query') and update.callback_query:
                 await update.callback_query.edit_message_text(error_msg)
             elif hasattr(update, 'message') and update.message:
                 await update.message.reply_text(error_msg)
 
-    async def _generate_quiz_questions(self, topic: str) -> dict:
+    async def _generate_quiz_question(self, topic: str) -> dict:
         """
-        Generate quiz questions using AI
-        
+        Generate single quiz question using AI
         Args:
             topic: Topic for quiz (ramayan, mahabharata, etc)
-            
         Returns:
-            Dictionary with quiz data or None if failed
+            Dictionary with question data or None if failed
         """
         try:
             prompt = self._create_quiz_prompt(topic)
-            
-            # Use AI enhancer to generate quiz
-            quiz_content = await self.ai_enhancer.enhance_caption(prompt)
-            
-            if not quiz_content:
-                logger.warning("AI returned empty quiz content")
+
+            # Use AI enhancer to generate question
+            question_content = await self.ai_enhancer.enhance_caption(prompt)
+
+            if not question_content:
+                logger.warning("AI returned empty question content")
                 return None
 
-            # Parse quiz questions from AI response
-            quiz_data = self._parse_quiz_response(quiz_content, topic)
-            
-            logger.info(f"Generated quiz for topic: {topic}")
-            return quiz_data
+            # Parse question from AI response
+            question_data = self._parse_question_response(question_content, topic)
+
+            logger.info(f"Generated question for topic: {topic}")
+            return question_data
 
         except Exception as e:
-            logger.error(f"Error generating quiz questions: {str(e)}")
+            logger.error(f"Error generating question: {str(e)}")
             return None
 
     def _create_quiz_prompt(self, topic: str) -> str:
-        """Create AI prompt for quiz generation"""
-        
+        """Create AI prompt for question generation - DETAILED & INTERESTING"""
         prompts = {
             "ramayan": (
-                "Generate a fun and educational quiz about Ramayan with 5 questions. "
-                "Each question should be in Hindi and English with 4 options (A, B, C, D). "
-                "Format: Q1) Question text\nA) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
-                "Questions should be about:\n"
-                "- राम की कहानी / Rama's story\n"
-                "- सीता का परिचय / Sita's story\n"
-                "- लंका विजय / Lanka conquest\n"
-                "- नैतिक पाठ / Moral lessons\n"
-                "- महत्वपूर्ण घटनाएं / Important events"
+                "Generate 1 detailed and interesting quiz question about Ramayan in Hindi and English. "
+                "The question should be thought-provoking and test deep knowledge. "
+                "Format: Q) Question text (in Hindi and English)\n"
+                "A) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
+                "Requirements:\n"
+                "- Question should be 1-2 sentences, detailed and interesting\n"
+                "- Exactly 4 options (A, B, C, D) - no more, no less\n"
+                "- Options should be plausible and test real knowledge\n"
+                "- Include both Hindi and English in the question\n"
+                "- Topics: राम की यात्रा, सीता का किस्सा, लंका विजय, नैतिक संदेश, महत्वपूर्ण पात्र"
             ),
+
             "mahabharata": (
-                "Generate a fun and educational quiz about Mahabharata with 5 questions. "
-                "Each question should be in Hindi and English with 4 options (A, B, C, D). "
-                "Format: Q1) Question text\nA) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
-                "Questions should be about:\n"
-                "- पांडव और कौरव / Pandavas and Kauravas\n"
-                "- भीष्म की कहानी / Bhishma's role\n"
-                "- कुरुक्षेत्र युद्ध / Kurukshetra war\n"
-                "- कृष्ण की शिक्षा / Krishna's teachings\n"
-                "- युद्ध की कहानियाँ / Battle stories"
+                "Generate 1 detailed and interesting quiz question about Mahabharata in Hindi and English. "
+                "The question should be thought-provoking and test deep knowledge. "
+                "Format: Q) Question text (in Hindi and English)\n"
+                "A) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
+                "Requirements:\n"
+                "- Question should be 1-2 sentences, detailed and interesting\n"
+                "- Exactly 4 options (A, B, C, D) - no more, no less\n"
+                "- Options should be plausible and test real knowledge\n"
+                "- Include both Hindi and English in the question\n"
+                "- Topics: पांडव-कौरव संघर्ष, कुरुक्षेत्र युद्ध, कृष्ण की भूमिका, धर्मशास्त्र का ज्ञान"
             ),
+
             "mythology": (
-                "Generate a fun and educational quiz about Hindu Mythology with 5 questions. "
-                "Each question should be in Hindi and English with 4 options (A, B, C, D). "
-                "Format: Q1) Question text\nA) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
-                "Questions should be about:\n"
-                "- देवता और असुर / Gods and demons\n"
-                "- पौराणिक कथाएं / Mythological tales\n"
-                "- देवताओं के नाम / Names of deities\n"
-                "- त्रिमूर्ति / Trinity\n"
-                "- शास्त्रों का ज्ञान / Scriptural knowledge"
+                "Generate 1 detailed and interesting quiz question about Hindu Mythology in Hindi and English. "
+                "The question should be thought-provoking and test deep knowledge. "
+                "Format: Q) Question text (in Hindi and English)\n"
+                "A) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
+                "Requirements:\n"
+                "- Question should be 1-2 sentences, detailed and interesting\n"
+                "- Exactly 4 options (A, B, C, D) - no more, no less\n"
+                "- Options should be plausible and test real knowledge\n"
+                "- Include both Hindi and English in the question\n"
+                "- Topics: देवता, असुर, पौराणिक कथाएं, देवताओं की शक्तियाँ, त्रिलोक"
             ),
+
             "vedas": (
-                "Generate a fun and educational quiz about Vedas with 5 questions. "
-                "Each question should be in Hindi and English with 4 options (A, B, C, D). "
-                "Format: Q1) Question text\nA) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
-                "Questions should be about:\n"
-                "- चार वेद / Four Vedas\n"
-                "- वेदों का महत्व / Vedas' significance\n"
-                "- उपनिषद / Upanishads\n"
-                "- योग और दर्शन / Philosophy\n"
-                "- प्राचीन ज्ञान / Ancient wisdom"
+                "Generate 1 detailed and interesting quiz question about Vedas in Hindi and English. "
+                "The question should be thought-provoking and test deep knowledge. "
+                "Format: Q) Question text (in Hindi and English)\n"
+                "A) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
+                "Requirements:\n"
+                "- Question should be 1-2 sentences, detailed and interesting\n"
+                "- Exactly 4 options (A, B, C, D) - no more, no less\n"
+                "- Options should be plausible and test real knowledge\n"
+                "- Include both Hindi and English in the question\n"
+                "- Topics: चार वेद, वेदों का ज्ञान, ऋषियों की शिक्षाएं, उपनिषद, दर्शन"
             )
         }
 
         # Default prompt if topic not found
         default_prompt = prompts.get(topic, prompts["mythology"])
-        
         return default_prompt
 
-    def _parse_quiz_response(self, response: str, topic: str) -> dict:
+    def _parse_question_response(self, response: str, topic: str) -> dict:
         """
-        Parse AI-generated quiz response into structured format
-        
+        Parse AI-generated question response into structured format
         Args:
-            response: AI-generated quiz text
+            response: AI-generated question text
             topic: Quiz topic
-            
         Returns:
-            Dictionary with quiz questions
+            Dictionary with question data
         """
-        questions = []
-        
-        # Split by question markers
-        q_blocks = response.split('\n\n')
-        
-        for block in q_blocks:
-            if not block.strip() or 'Q' not in block[:5]:
-                continue
-                
-            lines = block.strip().split('\n')
-            if len(lines) < 5:
-                continue
+        try:
+            lines = response.strip().split('\n')
             
-            try:
-                # Extract question text
-                question_line = lines[0]
-                question_text = question_line.replace('Q', '').replace(')', '').strip()
+            question_text = None
+            options = []
+            correct_answer = None
+
+            for i, line in enumerate(lines):
+                line = line.strip()
                 
-                # Extract options
-                options = []
-                correct_answer = None
+                # Find question (starts with Q or Q))
+                if line and (line.startswith('Q)') or (line.startswith('Q ') and i == 0)):
+                    question_text = line.replace('Q)', '').replace('Q ', '').strip()
                 
-                for line in lines[1:]:
-                    line = line.strip()
-                    
-                    if line.startswith(('A)', 'B)', 'C)', 'D)')):
-                        option_text = line[2:].strip()
+                # Find options (A, B, C, D)
+                elif line.startswith(('A)', 'B)', 'C)', 'D)')):
+                    option_text = line[2:].strip() if len(line) > 2 else line[1:].strip()
+                    if option_text:
                         options.append(option_text)
-                    
-                    if 'Correct' in line or 'सही' in line:
-                        # Extract correct answer
-                        if ':' in line:
-                            correct_answer = line.split(':')[1].strip().upper()
                 
-                if len(options) == 4 and question_text:
-                    questions.append({
-                        'text': question_text,
-                        'options': options,
-                        'correct': correct_answer or 'A'
-                    })
-            
-            except Exception as e:
-                logger.warning(f"Error parsing question block: {str(e)}")
-                continue
-        
-        return {
-            'topic': topic,
-            'questions': questions if questions else self._get_default_quiz(topic),
-            'created_at': datetime.now(TIMEZONE),
-            'posted': False
-        }
+                # Find correct answer
+                elif 'Correct' in line or 'सही' in line or 'correct' in line.lower():
+                    if ':' in line:
+                        answer_part = line.split(':')[1].strip()
+                        correct_answer = answer_part.replace(')', '').strip().upper()
 
-    def _get_default_quiz(self, topic: str) -> list:
-        """Get default quiz questions if AI generation fails"""
-        
-        default_quizzes = {
-            "ramayan": [
-                {
-                    "text": "राम के पिता का नाम क्या था? / Who was Rama's father?",
-                    "options": ["दशरथ / Dasharatha", "विश्वामित्र / Vishwamitra", "अग्नि / Agni", "इंद्र / Indra"],
-                    "correct": "A"
-                },
-                {
-                    "text": "सीता किस राज्य की राजकुमारी थीं? / Which kingdom's princess was Sita?",
-                    "options": ["मिथिला / Mithila", "अयोध्या / Ayodhya", "लंका / Lanka", "विदेह / Videha"],
-                    "correct": "A"
-                },
-                {
-                    "text": "राम का वनवास कितने वर्ष का था? / How many years was Rama's exile?",
-                    "options": ["5 वर्ष / years", "10 वर्ष / years", "14 वर्ष / years", "7 वर्ष / years"],
-                    "correct": "C"
-                },
-                {
-                    "text": "लंका के राजा का नाम क्या था? / What was the name of Lanka's king?",
-                    "options": ["कुंभकरण / Kumbhakarna", "रावण / Ravana", "मेघनाद / Meghnath", "विभीषण / Vibhishan"],
-                    "correct": "B"
-                },
-                {
-                    "text": "हनुमान किस देवता के अवतार माने जाते हैं? / Hanuman is considered an avatar of?",
-                    "options": ["वायु / Vayu", "शिव / Shiva", "विष्णु / Vishnu", "ब्रह्मा / Brahma"],
-                    "correct": "A"
-                }
-            ],
-            "mahabharata": [
-                {
-                    "text": "महाभारत का लेखक कौन था? / Who wrote the Mahabharata?",
-                    "options": ["वेदव्यास / Vedvyas", "कालिदास / Kalidasa", "तुलसीदास / Tulsidas", "भवभूति / Bhavabhuti"],
-                    "correct": "A"
-                },
-                {
-                    "text": "कुरुक्षेत्र युद्ध कितने दिन चला? / How many days did Kurukshetra war last?",
-                    "options": ["7 दिन / days", "14 दिन / days", "18 दिन / days", "21 दिन / days"],
-                    "correct": "C"
-                },
-                {
-                    "text": "पांडवों की संख्या कितनी थी? / How many Pandavas were there?",
-                    "options": ["3", "5", "7", "10"],
-                    "correct": "B"
-                },
-                {
-                    "text": "युधिष्ठिर के अन्य भाइयों के नाम बताइए। / Yudhishthira's brothers were:",
-                    "options": ["भीम और अर्जुन / Bhima and Arjun", "भीम, अर्जुन, नकुल, सहदेव / All of these", "नकुल और सहदेव / Nakul and Sahadev", "सिर्फ अर्जुन / Only Arjun"],
-                    "correct": "B"
-                },
-                {
-                    "text": "गीता किसने किसको सुनाई? / Who told Gita to whom?",
-                    "options": ["शिव ने पार्वती को / Shiva to Parvati", "कृष्ण ने अर्जुन को / Krishna to Arjun", "व्यास ने युधिष्ठिर को / Vyasa to Yudhisthira", "ब्रह्मा ने देवताओं को / Brahma to deities"],
-                    "correct": "B"
-                }
-            ]
-        }
-        
-        return default_quizzes.get(topic, default_quizzes["ramayan"])
+            # Validate question has exactly 4 options
+            if len(options) != 4:
+                logger.warning(f"Question has {len(options)} options, padding/trimming to 4")
+                options = options[:4] if len(options) > 4 else options + ["Option"] * (4 - len(options))
 
-    def _format_quiz_preview(self, quiz_data: dict) -> str:
-        """Format quiz for preview display"""
-        preview = f"📚 **{quiz_data['topic'].title()} Quiz**\n\n"
-        preview += f"📊 Questions: {len(quiz_data['questions'])}\n"
-        preview += f"⏱️ Created: {quiz_data['created_at'].strftime('%Y-%m-%d %H:%M')}\n\n"
+            if not question_text:
+                question_text = "No question text found"
+
+            if not correct_answer or correct_answer not in ['A', 'B', 'C', 'D']:
+                correct_answer = 'A'
+
+            return {
+                'topic': topic,
+                'question': question_text,
+                'options': options,
+                'correct': correct_answer,
+                'created_at': datetime.now(TIMEZONE),
+                'posted': False
+            }
+
+        except Exception as e:
+            logger.error(f"Error parsing question: {str(e)}")
+            return None
+
+    def _format_question_preview(self, question_data: dict) -> str:
+        """Format question for preview display"""
+        preview = f"📚 **{question_data['topic'].title()} Quiz**\n\n"
+        preview += f"❓ {question_data['question']}\n\n"
         
-        preview += "**Sample Questions:**\n"
-        for i, q in enumerate(quiz_data['questions'][:2], 1):
-            preview += f"\n{i}. {q['text']}\n"
-            for j, opt in enumerate(q['options'], 1):
-                preview += f"   {chr(64+j)}) {opt}\n"
+        for i, opt in enumerate(question_data['options']):
+            preview += f"{chr(65+i)}) {opt}\n"
         
-        if len(quiz_data['questions']) > 2:
-            preview += f"\n... और {len(quiz_data['questions']) - 2} और प्रश्न"
+        preview += f"\n💡 सही उत्तर: {question_data['correct']}"
         
         return preview
 
     async def quiz_post_now_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Post quiz to channel immediately"""
+        """Post question to channel immediately as poll"""
         query = update.callback_query
         await query.answer()
 
-        if not self.current_quiz:
-            await query.edit_message_text("❌ No quiz data found. Please generate a quiz first.")
+        if not self.current_question:
+            await query.edit_message_text("❌ No question data found. Please generate a question first.")
             return
 
         try:
             await query.edit_message_text(
-                "📤 Posting quiz to channel...\n⏳ Please wait..."
+                "📤 Posting question to channel...\n⏳ Please wait...",
+                parse_mode="Markdown"
             )
 
-            # Post quiz to channel
-            await self._post_quiz_to_channel(self.current_quiz)
+            # Post question as poll
+            await self._post_question_as_poll(self.current_question)
 
             await query.edit_message_text(
-                "✅ **Quiz Posted Successfully!**\n\n"
-                f"📚 Topic: {self.current_quiz['topic'].title()}\n"
-                f"📊 Questions: {len(self.current_quiz['questions'])}\n"
-                f"✨ Posted to channel!"
+                "✅ **Question Posted Successfully!**\n\n"
+                f"📚 Topic: {self.current_question['topic'].title()}\n"
+                f"✨ Posted as poll to channel!",
+                parse_mode="Markdown"
             )
 
             self.quiz_mode = False
 
         except Exception as e:
-            logger.error(f"Error posting quiz: {str(e)}")
-            await query.edit_message_text(f"❌ Error posting quiz: {str(e)}")
+            logger.error(f"Error posting question: {str(e)}")
+            await query.edit_message_text(f"❌ Error posting question: {str(e)}")
 
     async def quiz_schedule_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Schedule quiz posting"""
+        """Schedule question posting"""
         query = update.callback_query
         await query.answer()
 
-        if not self.current_quiz:
-            await query.edit_message_text("❌ No quiz data found.")
+        if not self.current_question:
+            await query.edit_message_text("❌ No question data found.")
             return
 
         keyboard = [
@@ -437,93 +374,88 @@ class QuizGenerator:
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await query.edit_message_text(
-            "⏰ **Schedule Quiz Posting**\n\n"
+            "⏰ **Schedule Question Posting**\n\n"
             "Select delay before posting:",
-            reply_markup=reply_markup
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
         )
 
     async def quiz_delay_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE, delay_minutes: int):
-        """Schedule quiz with delay"""
+        """Schedule question with delay"""
         query = update.callback_query
         await query.answer()
 
         try:
             await query.edit_message_text(
-                f"⏰ Quiz scheduled to post in {delay_minutes} minutes...\n"
-                f"✨ Please wait!"
+                f"⏰ Question scheduled to post in {delay_minutes} minutes...\n"
+                f"✨ Please wait!",
+                parse_mode="Markdown"
             )
 
             # Schedule posting
             await asyncio.sleep(delay_minutes * 60)
-            await self._post_quiz_to_channel(self.current_quiz)
+
+            await self._post_question_as_poll(self.current_question)
 
             await query.edit_message_text(
-                "✅ **Scheduled Quiz Posted!**\n\n"
-                f"📚 Topic: {self.current_quiz['topic'].title()}\n"
-                f"📊 Questions: {len(self.current_quiz['questions'])}\n"
-                f"✨ Posted to channel!"
+                "✅ **Scheduled Question Posted!**\n\n"
+                f"📚 Topic: {self.current_question['topic'].title()}\n"
+                f"✨ Posted as poll to channel!",
+                parse_mode="Markdown"
             )
 
             self.quiz_mode = False
 
         except Exception as e:
-            logger.error(f"Error in scheduled quiz posting: {str(e)}")
+            logger.error(f"Error in scheduled question posting: {str(e)}")
 
-    async def _post_quiz_to_channel(self, quiz_data: dict):
+    async def _post_question_as_poll(self, question_data: dict):
         """
-        Post quiz to Telegram channel as poll
-        
+        Post question to Telegram channel as poll
         Args:
-            quiz_data: Dictionary containing quiz questions
+            question_data: Dictionary containing question data
         """
         try:
             if not self.bot.userbot or not self.bot.userbot.is_connected():
                 logger.error("Userbot not connected")
                 return
 
-            # Get first question for poll
-            first_question = quiz_data['questions'][0]
-            
-            # Create poll message
-            poll_message = (
-                f"🎯 **{quiz_data['topic'].title()} Quiz**\n\n"
-                f"{first_question['text']}\n\n"
-                f"📊 Total Questions: {len(quiz_data['questions'])}"
-            )
+            # Get channel entity
+            channel = await self.bot.userbot.get_entity(YOUR_CHANNEL_ID)
+
+            # Create poll with 4 options
+            question_text = question_data['question']
+            options = question_data['options']
+            correct_option = ord(question_data['correct']) - ord('A')  # Convert A->0, B->1, etc
 
             # Send poll to channel
-            channel = await self.bot.userbot.get_entity(YOUR_CHANNEL_ID)
-            
-            # Send as message with options
             await self.bot.userbot.send_message(
                 channel,
-                poll_message
+                question_text,
+                buttons=[
+                    options
+                ] if len(options) == 4 else None
             )
 
-            # Send each question as separate message
-            for i, question in enumerate(quiz_data['questions'], 1):
-                question_text = (
-                    f"**प्रश्न {i}/{len(quiz_data['questions'])}**\n\n"
-                    f"{question['text']}\n\n"
-                    f"A) {question['options'][0]}\n"
-                    f"B) {question['options'][1]}\n"
-                    f"C) {question['options'][2]}\n"
-                    f"D) {question['options'][3]}\n\n"
-                    f"💡 सही उत्तर: {question['correct']}"
-                )
-                
-                await self.bot.userbot.send_message(
-                    channel,
-                    question_text
-                )
-                
-                await asyncio.sleep(1)  # Delay between posts
+            # Send poll with correct answer highlighted
+            poll_message = (
+                f"🎯 **{question_data['topic'].title()} Question**\n\n"
+                f"❓ {question_text}\n\n"
+                f"A) {options[0]}\n"
+                f"B) {options[1]}\n"
+                f"C) {options[2]}\n"
+                f"D) {options[3]}\n\n"
+                f"💡 सही उत्तर: {question_data['correct']}"
+            )
 
-            logger.info(f"Quiz posted to channel: {quiz_data['topic']}")
-            quiz_data['posted'] = True
+            # Send as formatted message
+            await self.bot.userbot.send_message(channel, poll_message)
+
+            logger.info(f"Question posted to channel: {question_data['topic']}")
+            question_data['posted'] = True
 
         except Exception as e:
-            logger.error(f"Error posting quiz to channel: {str(e)}")
+            logger.error(f"Error posting question to channel: {str(e)}")
             raise
 
     async def quiz_cancel_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -532,10 +464,11 @@ class QuizGenerator:
         await query.answer()
 
         self.quiz_mode = False
-        self.current_quiz = None
+        self.current_question = None
         self.quiz_topic = None
 
         await query.edit_message_text(
-            "❌ Quiz generation cancelled.\n\n"
-            "Use /quiz to start a new quiz!"
+            "❌ Question generation cancelled.\n\n"
+            "Use /quiz to generate a new question!",
+            parse_mode="Markdown"
         )
