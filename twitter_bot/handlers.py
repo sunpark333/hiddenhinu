@@ -334,7 +334,65 @@ class MessageHandlers:
             self.bot.quality_selected = False
             self.bot.video_received = False
 
-            await message.reply_text("⏳ Processing link and downloading video...")
+            await message.reply_text("⏳ Processing link and downloading")
+
+# ADD THESE IMPORTS AT THE TOP OF handlers.py
+# from quiz import QuizGenerator  # Already initialized in main.py
+
+
+# ADD THESE METHODS TO MessageHandlers CLASS IN handlers.py
+
+    async def add_all_handlers(self, bot_app):
+        """Add all command and message handlers to bot - UPDATED"""
+        bot_app.add_handler(CommandHandler("start", self.start_command))
+        bot_app.add_handler(CommandHandler("task", self.bot.scheduler.start_task))
+        bot_app.add_handler(CommandHandler("task2", self.bot.scheduler.start_task2))
+        bot_app.add_handler(CommandHandler("task3", self.bot.scheduler.start_task3))
+        bot_app.add_handler(CommandHandler("endtask", self.bot.scheduler.end_task))
+        bot_app.add_handler(CommandHandler("twitter_poster", self.bot.twitter_poster.twitter_poster_command))
+        
+        # ✨ NEW - QUIZ COMMANDS
+        if hasattr(self, 'quiz_generator') and self.quiz_generator:
+            bot_app.add_handler(CommandHandler("quiz", self.quiz_generator.quiz_command))
+        
+        bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_link))
+        bot_app.add_handler(CallbackQueryHandler(self.quiz_callback_handler, pattern="^quiz_"))
+        bot_app.add_handler(CallbackQueryHandler(self.button_handler, pattern="^(task|timer)"))
+
+
+    async def quiz_callback_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle all quiz-related callback queries"""
+        query = update.callback_query
+        callback_data = query.data
+
+        if not hasattr(self, 'quiz_generator') or not self.quiz_generator:
+            await query.answer("Quiz generator not initialized")
+            return
+
+        try:
+            if callback_data.startswith("quiz_") and any(x in callback_data for x in ["ramayan", "mahabharata", "mythology", "vedas"]):
+                await self.quiz_generator.quiz_button_handler(update, context)
+            
+            elif callback_data == "quiz_post_now":
+                await self.quiz_generator.quiz_post_now_handler(update, context)
+            
+            elif callback_data == "quiz_schedule":
+                await self.quiz_generator.quiz_schedule_handler(update, context)
+            
+            elif callback_data.startswith("quiz_delay_"):
+                delay_str = callback_data.replace("quiz_delay_", "")
+                try:
+                    delay_minutes = int(delay_str)
+                    await self.quiz_generator.quiz_delay_handler(update, context, delay_minutes)
+                except ValueError:
+                    await query.answer("Invalid delay value")
+            
+            elif callback_data == "quiz_cancel":
+                await self.quiz_generator.quiz_cancel_handler(update, context)
+        
+        except Exception as e:
+            logger.error(f"Error in quiz callback handler: {e}")
+            await query.answer("Error processing your request", show_alert=True)
             await self.bot.userbot.send_message(TWITTER_VID_BOT, text)
 
             logger.info(f"Link sent to twittervid_bot: {text}")
