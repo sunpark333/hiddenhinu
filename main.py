@@ -26,22 +26,17 @@ class TwitterBot:
         self.userbot_manager = UserBotManager(self)
         self.telegram_handler = TelegramHandler(self)
         self._shutdown_flag = False
-        self.http_app = None
-        self.runner = None
-        self.site = None
-        self.polling_task = None
-        self._polling_started = False
 
     async def initialize_services(self):
         """Initialize all services"""
         try:
-            # Initialize Twitter Poster
+            self.logger.info("Initializing Twitter Poster...")
             await self.twitter_poster.initialize()
             
-            # Initialize UserBot
+            self.logger.info("Initializing UserBot...")
             await self.userbot_manager.initialize()
             
-            # Initialize Telegram Bot Handler
+            self.logger.info("Initializing Telegram Bot...")
             await self.telegram_handler.initialize()
             
             self.logger.info("All services initialized successfully")
@@ -50,37 +45,17 @@ class TwitterBot:
             self.logger.error(f"Failed to initialize services: {str(e)}")
             return False
 
-    async def start_http_server(self):
-        """Start HTTP server for health checks"""
-        from aiohttp import web
-        
-        async def health_check(request):
-            return web.Response(text="Bot is running!")
-        
-        self.http_app = web.Application()
-        self.http_app.router.add_get('/', health_check)
-        self.http_app.router.add_get('/health', health_check)
-        
-        runner = web.AppRunner(self.http_app)
-        await runner.setup()
-        
-        port = int(os.environ.get('PORT', 8000))
-        site = web.TCPSite(runner, '0.0.0.0', port)
-        await site.start()
-        
-        self.logger.info(f"HTTP server started on port {port}")
-        return runner, site
-
     async def run_async(self):
         """Async main function"""
         try:
-            self.logger.info("Starting HTTP server for health checks...")
-            self.runner, self.site = await self.start_http_server()
+            self.logger.info("Starting bot services...")
+            success = await self.initialize_services()
             
-            self.logger.info("Initializing services...")
-            await self.initialize_services()
+            if not success:
+                raise Exception("Failed to initialize services")
             
-            self.logger.info("Bot started successfully! Waiting for messages...")
+            self.logger.info("✅ Bot started successfully!")
+            self.logger.info("🤖 Waiting for commands...")
             
             # Keep running until shutdown
             while not self._shutdown_flag:
@@ -99,10 +74,6 @@ class TwitterBot:
             await self.telegram_handler.shutdown()
             await self.userbot_manager.shutdown()
             await self.twitter_poster.shutdown()
-            
-            if self.runner:
-                self.logger.info("Stopping HTTP server...")
-                await self.runner.cleanup()
                 
         except Exception as e:
             self.logger.error(f"Error during shutdown: {e}")
@@ -116,6 +87,7 @@ class TwitterBot:
         
         while retry_count < max_retries and not self._shutdown_flag:
             try:
+                # Create new event loop
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 
@@ -136,6 +108,7 @@ class TwitterBot:
                         loop.run_until_complete(self.shutdown())
                     except Exception as shutdown_error:
                         self.logger.error(f"Error during shutdown: {shutdown_error}")
+                    
                     import time
                     time.sleep(10)
                 else:
