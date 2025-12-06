@@ -1,79 +1,89 @@
+"""
+Utility functions - Text processing and helper functions
+"""
+
 import logging
 import re
-import os
-from aiohttp import web
-from telegram import Update
-from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
 
-async def health_check(request):
-    """Health check endpoint for Koyeb"""
-    return web.Response(text="Bot is running!")
 
-async def start_http_server(health_check_func):
-    """Start HTTP server for health checks"""
-    http_app = web.Application()
-    http_app.router.add_get('/', health_check_func)
-    http_app.router.add_get('/health', health_check_func)
-    
-    runner = web.AppRunner(http_app)
-    await runner.setup()
-    
-    port = int(os.environ.get('PORT', 8000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    
-    logger.info(f"HTTP server started on port {port}")
-    return runner, site
+class TextUtils:
+    """Utility class for text processing"""
 
-def is_admin_user(user_id, admin_ids):
-    """Check if user is admin"""
-    return user_id in admin_ids
+    @staticmethod
+    def clean_text(text):
+        """Remove last 3 lines and clean text"""
+        if not text:
+            return text
 
-async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, admin_ids):
-    """Check if user is admin and send access denied message if not"""
-    try:
-        if hasattr(update, 'effective_user'):
-            user_id = update.effective_user.id
-        elif hasattr(update, 'message') and update.message:
-            user_id = update.message.from_user.id
-        elif hasattr(update, 'callback_query') and update.callback_query:
-            user_id = update.callback_query.from_user.id
-        else:
-            user_id = update.from_user.id if hasattr(update, 'from_user') else None
-        
-        if not user_id or not is_admin_user(user_id, admin_ids):
-            if hasattr(update, 'message') and update.message:
-                await update.message.reply_text(
-                    "🚫 **Access Denied!**\n\n"
-                    "You are not authorized to use this bot.\n"
-                    "This bot is restricted to administrators only."
-                )
-            elif hasattr(update, 'callback_query') and update.callback_query:
-                await update.callback_query.message.reply_text(
-                    "🚫 **Access Denied!**\n\n"
-                    "You are not authorized to use this bot.\n"
-                    "This bot is restricted to administrators only."
-                )
-            return False
-        return True
-    except Exception as e:
-        logger.error(f"Error in admin check: {e}")
-        return False
+        lines = text.split('\n')
 
-def clean_text(text):
-    """Remove last 3 lines and clean text"""
-    if not text:
-        return text
+        if len(lines) > 3:
+            lines = lines[:-3]
 
-    lines = text.split('\n')
-    if len(lines) > 3:
-        lines = lines[:-3]
+        cleaned_text = '\n'.join(lines)
 
-    cleaned_text = '\n'.join(lines)
-    hidden_link_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
-    cleaned_text = re.sub(hidden_link_pattern, r'\1', cleaned_text)
-    cleaned_text = cleaned_text.replace('📲 @twittervid_bot', '').strip()
+        hidden_link_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
+        cleaned_text = re.sub(hidden_link_pattern, r'\1', cleaned_text)
 
-    return cleaned_text
+        cleaned_text = cleaned_text.replace('📲 @twittervid_bot', '').strip()
+
+        return cleaned_text
+
+    @staticmethod
+    def process_text_for_twitter(text):
+        """Process text for Twitter posting"""
+        if not text:
+            return ""
+
+        processed_text = text
+
+        # Remove URLs
+        processed_text = re.sub(r'http\S+|www\S+|https\S+', '', processed_text, flags=re.MULTILINE)
+
+        # Remove hashtags and mentions if needed
+        processed_text = re.sub(r'#\w+', '', processed_text)
+        processed_text = re.sub(r'@\w+', '', processed_text)
+
+        # Trim extra spaces
+        processed_text = re.sub(r'\s+', ' ', processed_text).strip()
+
+        return processed_text
+
+    @staticmethod
+    def truncate_text(text, max_length=280, suffix="..."):
+        """Truncate text to max length"""
+        if len(text) <= max_length:
+            return text
+
+        truncated = text[:max_length - len(suffix)]
+        return truncated + suffix
+
+    @staticmethod
+    def is_valid_twitter_link(text):
+        """Check if text contains valid Twitter link"""
+        return any(domain in text for domain in ['twitter.com', 'x.com'])
+
+    @staticmethod
+    def extract_urls(text):
+        """Extract URLs from text"""
+        url_pattern = r'https?://[^\s]+'
+        return re.findall(url_pattern, text)
+
+    @staticmethod
+    def remove_urls(text):
+        """Remove all URLs from text"""
+        return re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+
+    @staticmethod
+    def extract_mentions(text):
+        """Extract mentions from text"""
+        mention_pattern = r'@\w+'
+        return re.findall(mention_pattern, text)
+
+    @staticmethod
+    def extract_hashtags(text):
+        """Extract hashtags from text"""
+        hashtag_pattern = r'#\w+'
+        return re.findall(hashtag_pattern, text)
