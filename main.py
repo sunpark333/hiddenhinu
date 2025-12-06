@@ -1,5 +1,5 @@
 """
-Twitter Video Bot - Main Entry Point
+Twitter Video Bot - Main Entry Point (Updated with Quiz)
 Entry point for starting the bot
 """
 
@@ -21,14 +21,26 @@ logger = logging.getLogger(__name__)
 
 # Import config and bot
 from config import TELEGRAM_BOT_TOKEN, API_ID, API_HASH, TELEGRAM_SESSION_STRING, TWITTER_VID_BOT, YOUR_CHANNEL_ID, YOUR_SECOND_CHANNEL_ID, TIMEZONE
-from twitter_bot.core import TwitterBot
+from twitter_bot import TwitterBot
+from quiz import QuizGenerator
+
 
 def main():
     """Main entry point"""
-    logger.info("Starting Twitter Bot on Koyeb...")
+    logger.info("Starting Twitter Bot with Quiz Generator on Koyeb...")
     
     try:
         bot = TwitterBot()
+        
+        # Initialize quiz generator
+        quiz_generator = QuizGenerator(bot, bot.ai_enhancer)
+        bot.quiz_generator = quiz_generator
+        
+        # Add quiz handlers to handlers module
+        bot.handlers.quiz_generator = quiz_generator
+        
+        logger.info("Quiz Generator initialized successfully")
+        
         bot.run()
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
