@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telethon.tl.types import TypeInputPeer
+import random
 
 from config import YOUR_CHANNEL_ID, TIMEZONE, ADMIN_IDS
 
@@ -51,6 +52,10 @@ class QuizGenerator:
                 [
                     InlineKeyboardButton("🕉️ Hindu Mythology", callback_data="quiz_mythology"),
                     InlineKeyboardButton("📚 Vedas", callback_data="quiz_vedas")
+                ],
+                [
+                    InlineKeyboardButton("🕌 Bhagavad Gita", callback_data="quiz_gita"),
+                    InlineKeyboardButton("⛰️ Himalayas", callback_data="quiz_himalayas")
                 ]
             ]
 
@@ -62,7 +67,9 @@ class QuizGenerator:
                 "• **Ramayan** - भगवान राम की गाथा\n"
                 "• **Mahabharata** - महाकाव्य की कहानियाँ\n"
                 "• **Hindu Mythology** - हिंदू पौराणिक कथाएं\n"
-                "• **Vedas** - वेदों का ज्ञान\n\n"
+                "• **Vedas** - वेदों का ज्ञान\n"
+                "• **Bhagavad Gita** - भगवद् गीता का ज्ञान\n"
+                "• **Himalayas** - हिमालय से जुड़ी कथाएं\n\n"
                 "📋 या command से use करो: `/quiz <topic>`",
                 reply_markup=reply_markup
             )
@@ -94,7 +101,7 @@ class QuizGenerator:
                     f"🎯 **Quiz Generator Started**\n\n"
                     f"📖 Topic: **{topic.title()}**\n"
                     f"🤖 Generating quiz with AI...\n\n"
-                    f"⏳ Please wait..."
+                    f"⏳ Please wait... (This may take 20-30 seconds)"
                 )
                 message_obj = update
             else:
@@ -102,7 +109,7 @@ class QuizGenerator:
                     f"🎯 **Quiz Generator Started**\n\n"
                     f"📖 Topic: **{topic.title()}**\n"
                     f"🤖 Generating quiz with AI...\n\n"
-                    f"⏳ Please wait..."
+                    f"⏳ Please wait... (This may take 20-30 seconds)"
                 )
                 message_obj = update.message
 
@@ -129,6 +136,7 @@ class QuizGenerator:
                     InlineKeyboardButton("⏰ Schedule", callback_data="quiz_schedule")
                 ],
                 [
+                    InlineKeyboardButton("🔄 Generate New", callback_data=f"quiz_regenerate_{topic}"),
                     InlineKeyboardButton("❌ Cancel", callback_data="quiz_cancel")
                 ]
             ]
@@ -139,14 +147,14 @@ class QuizGenerator:
 
             if hasattr(message_obj, 'edit_text'):
                 await message_obj.edit_text(
-                    f"✅ **Quiz Generated!**\n\n"
+                    f"✅ **Quiz Generated Successfully!**\n\n"
                     f"{quiz_preview}\n\n"
                     f"🎯 Select action:",
                     reply_markup=reply_markup
                 )
             elif hasattr(message_obj, 'reply_text'):
                 await message_obj.reply_text(
-                    f"✅ **Quiz Generated!**\n\n"
+                    f"✅ **Quiz Generated Successfully!**\n\n"
                     f"{quiz_preview}\n\n"
                     f"🎯 Select action:",
                     reply_markup=reply_markup
@@ -174,8 +182,12 @@ class QuizGenerator:
         try:
             prompt = self._create_quiz_prompt(topic)
             
-            # Use AI enhancer to generate quiz
-            quiz_content = await self.ai_enhancer.enhance_caption(prompt)
+            # Use AI enhancer to generate quiz with better parameters
+            quiz_content = await self.ai_enhancer.enhance_caption(
+                prompt,
+                temperature=0.8,  # More creative
+                max_tokens=1500    # Longer response for detailed questions
+            )
             
             if not quiz_content:
                 logger.warning("AI returned empty quiz content")
@@ -184,7 +196,11 @@ class QuizGenerator:
             # Parse quiz questions from AI response
             quiz_data = self._parse_quiz_response(quiz_content, topic)
             
-            logger.info(f"Generated quiz for topic: {topic}")
+            if not quiz_data or len(quiz_data['questions']) == 0:
+                logger.warning("No valid questions parsed from AI response")
+                return None
+            
+            logger.info(f"Generated quiz for topic: {topic} with {len(quiz_data['questions'])} questions")
             return quiz_data
 
         except Exception as e:
@@ -192,59 +208,127 @@ class QuizGenerator:
             return None
 
     def _create_quiz_prompt(self, topic: str) -> str:
-        """Create AI prompt for quiz generation"""
+        """Create AI prompt for quiz generation with detailed, interesting questions"""
         
-        prompts = {
+        topic_prompts = {
             "ramayan": (
-                "Generate a fun and educational quiz about Ramayan with 5 questions. "
-                "Each question should be in Hindi and English with 4 options (A, B, C, D). "
-                "Format: Q1) Question text\nA) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
-                "Questions should be about:\n"
-                "- राम की कहानी / Rama's story\n"
-                "- सीता का परिचय / Sita's story\n"
-                "- लंका विजय / Lanka conquest\n"
-                "- नैतिक पाठ / Moral lessons\n"
-                "- महत्वपूर्ण घटनाएं / Important events"
+                "Generate 5 interesting and challenging quiz questions about Ramayan with detailed explanations. "
+                "Each question should be in Hindi and English, focusing on less-known facts and deeper meanings. "
+                "Format exactly:\n\n"
+                "Q1) [Interesting question about Ramayan that tests deeper knowledge]\n"
+                "A) [Option 1]\n"
+                "B) [Option 2]\n"
+                "C) [Option 3]\n"
+                "D) [Option 4]\n"
+                "Correct: [Letter]\n"
+                "Explanation: [Detailed explanation of the answer in Hindi and English]\n\n"
+                "Questions should cover:\n"
+                "- Symbolism and hidden meanings in Ramayan\n"
+                - "Lesser-known characters and their roles\n"
+                - "Philosophical teachings and moral lessons\n"
+                - "Historical and cultural context\n"
+                - "Comparisons with other epics\n"
+                "Make questions thought-provoking and educational."
             ),
             "mahabharata": (
-                "Generate a fun and educational quiz about Mahabharata with 5 questions. "
-                "Each question should be in Hindi and English with 4 options (A, B, C, D). "
-                "Format: Q1) Question text\nA) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
-                "Questions should be about:\n"
-                "- पांडव और कौरव / Pandavas and Kauravas\n"
-                "- भीष्म की कहानी / Bhishma's role\n"
-                "- कुरुक्षेत्र युद्ध / Kurukshetra war\n"
-                "- कृष्ण की शिक्षा / Krishna's teachings\n"
-                "- युद्ध की कहानियाँ / Battle stories"
+                "Generate 5 intriguing and educational quiz questions about Mahabharata that test advanced knowledge. "
+                "Each question should be in Hindi and English, exploring complex aspects of the epic. "
+                "Format exactly:\n\n"
+                "Q1) [Challenging question about Mahabharata]\n"
+                "A) [Option 1]\n"
+                "B) [Option 2]\n"
+                "C) [Option 3]\n"
+                "D) [Option 4]\n"
+                "Correct: [Letter]\n"
+                "Explanation: [Comprehensive explanation in Hindi and English]\n\n"
+                "Focus on:\n"
+                "- Ethical dilemmas and moral complexities\n"
+                "- Strategic aspects of the Kurukshetra war\n"
+                "- Psychological profiles of characters\n"
+                "- Philosophical teachings beyond Bhagavad Gita\n"
+                "- Societal structures and dharma concepts\n"
+                "Questions should make people think deeply."
             ),
             "mythology": (
-                "Generate a fun and educational quiz about Hindu Mythology with 5 questions. "
-                "Each question should be in Hindi and English with 4 options (A, B, C, D). "
-                "Format: Q1) Question text\nA) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
-                "Questions should be about:\n"
-                "- देवता और असुर / Gods and demons\n"
-                "- पौराणिक कथाएं / Mythological tales\n"
-                "- देवताओं के नाम / Names of deities\n"
-                "- त्रिमूर्ति / Trinity\n"
-                "- शास्त्रों का ज्ञान / Scriptural knowledge"
+                "Generate 5 fascinating quiz questions about Hindu Mythology covering various traditions and regions. "
+                "Each question should be in Hindi and English, exploring diverse mythological narratives. "
+                "Format exactly:\n\n"
+                "Q1) [Engaging question about Hindu mythology]\n"
+                "A) [Option 1]\n"
+                "B) [Option 2]\n"
+                "C) [Option 3]\n"
+                "D) [Option 4]\n"
+                "Correct: [Letter]\n"
+                "Explanation: [Detailed mythological context in Hindi and English]\n\n"
+                "Cover:\n"
+                "- Regional variations of mythological stories\n"
+                - "Symbolism in temple architecture and iconography\n"
+                - "Mythological connections to astronomy and science\n"
+                - "Folk traditions and local deities\n"
+                - "Mythological basis of festivals and rituals\n"
+                "Make questions culturally rich and informative."
             ),
             "vedas": (
-                "Generate a fun and educational quiz about Vedas with 5 questions. "
-                "Each question should be in Hindi and English with 4 options (A, B, C, D). "
-                "Format: Q1) Question text\nA) Option1\nB) Option2\nC) Option3\nD) Option4\nCorrect: A\n\n"
-                "Questions should be about:\n"
-                "- चार वेद / Four Vedas\n"
-                "- वेदों का महत्व / Vedas' significance\n"
-                "- उपनिषद / Upanishads\n"
-                "- योग और दर्शन / Philosophy\n"
-                "- प्राचीन ज्ञान / Ancient wisdom"
+                "Generate 5 insightful quiz questions about Vedas and Vedic literature. "
+                "Each question should be in Hindi and English, focusing on philosophical depth. "
+                "Format exactly:\n\n"
+                "Q1) [Deep question about Vedic knowledge]\n"
+                "A) [Option 1]\n"
+                "B) [Option 2]\n"
+                "C) [Option 3]\n"
+                "D) [Option 4]\n"
+                "Correct: [Letter]\n"
+                "Explanation: [Scholarly explanation in Hindi and English]\n\n"
+                "Topics:\n"
+                "- Vedic cosmology and metaphysics\n"
+                - "Ritual symbolism and spiritual significance\n"
+                - "Vedic mathematics and astronomy\n"
+                - "Philosophical schools emerging from Vedas\n"
+                - "Modern scientific correlations with Vedic concepts\n"
+                "Questions should be intellectually stimulating."
+            ),
+            "gita": (
+                "Generate 5 profound quiz questions about Bhagavad Gita covering philosophical teachings. "
+                "Each question should be in Hindi and English, exploring spiritual concepts. "
+                "Format exactly:\n\n"
+                "Q1) [Philosophical question from Bhagavad Gita]\n"
+                "A) [Option 1]\n"
+                "B) [Option 2]\n"
+                "C) [Option 3]\n"
+                "D) [Option 4]\n"
+                "Correct: [Letter]\n"
+                "Explanation: [Spiritual interpretation in Hindi and English]\n\n"
+                "Focus on:\n"
+                "- Concepts of Dharma, Karma, and Moksha\n"
+                - "Different yoga paths (Jnana, Karma, Bhakti, Dhyana)\n"
+                - "Nature of Self (Atman) and Supreme (Brahman)\n"
+                - "Practical applications in modern life\n"
+                - "Comparative philosophy with other traditions\n"
+                "Questions should inspire self-reflection."
+            ),
+            "himalayas": (
+                "Generate 5 captivating quiz questions about Himalayas in Hindu mythology and spirituality. "
+                "Each question should be in Hindi and English, connecting geography with mythology. "
+                "Format exactly:\n\n"
+                "Q1) [Interesting question about Himalayas]\n"
+                "A) [Option 1]\n"
+                "B) [Option 2]\n"
+                "C) [Option 3]\n"
+                "D) [Option 4]\n"
+                "Correct: [Letter]\n"
+                "Explanation: [Cultural and mythological context in Hindi and English]\n\n"
+                "Cover:\n"
+                "- Mythological significance of Himalayan peaks\n"
+                - "Pilgrimage sites and their stories\n"
+                - "Himalayan saints and traditions\n"
+                - "Ecological importance in Hindu thought\n"
+                - "References in scriptures and epics\n"
+                "Questions should be geographically and mythologically rich."
             )
         }
 
-        # Default prompt if topic not found
-        default_prompt = prompts.get(topic, prompts["mythology"])
-        
-        return default_prompt
+        # Default to mythology if topic not found
+        return topic_prompts.get(topic, topic_prompts["mythology"])
 
     def _parse_quiz_response(self, response: str, topic: str) -> dict:
         """
@@ -259,132 +343,160 @@ class QuizGenerator:
         """
         questions = []
         
-        # Split by question markers
-        q_blocks = response.split('\n\n')
+        # Split by question blocks
+        blocks = response.split('\n\n')
+        current_question = None
         
-        for block in q_blocks:
-            if not block.strip() or 'Q' not in block[:5]:
-                continue
-                
-            lines = block.strip().split('\n')
-            if len(lines) < 5:
+        for block in blocks:
+            block = block.strip()
+            if not block:
                 continue
             
-            try:
+            # Check if this is a new question
+            if block.startswith(('Q', 'Question', 'प्रश्न')):
+                if current_question and 'text' in current_question and len(current_question.get('options', [])) == 4:
+                    questions.append(current_question)
+                
+                # Start new question
+                current_question = {'text': '', 'options': [], 'correct': '', 'explanation': ''}
+                
                 # Extract question text
-                question_line = lines[0]
-                question_text = question_line.replace('Q', '').replace(')', '').strip()
-                
-                # Extract options
-                options = []
-                correct_answer = None
-                
-                for line in lines[1:]:
-                    line = line.strip()
-                    
-                    if line.startswith(('A)', 'B)', 'C)', 'D)')):
+                lines = block.split('\n')
+                question_text = ''
+                for line in lines:
+                    if line.startswith(('Q', 'Question', 'प्रश्न')):
+                        # Remove Q1), Q2) etc
+                        import re
+                        question_text = re.sub(r'^Q\d+\)\s*', '', line)
+                        question_text = re.sub(r'^Question \d+:\s*', '', question_text)
+                        question_text = re.sub(r'^प्रश्न \d+:\s*', '', question_text)
+                        current_question['text'] = question_text.strip()
+                    elif line.startswith(('A)', 'B)', 'C)', 'D)')):
                         option_text = line[2:].strip()
-                        options.append(option_text)
-                    
-                    if 'Correct' in line or 'सही' in line:
-                        # Extract correct answer
+                        current_question['options'].append(option_text)
+                    elif 'Correct:' in line or 'सही:' in line:
+                        correct_part = line.split(':')[1].strip().upper()
+                        current_question['correct'] = correct_part[0] if correct_part else 'A'
+                    elif 'Explanation:' in line or 'व्याख्या:' in line:
                         if ':' in line:
-                            correct_answer = line.split(':')[1].strip().upper()
-                
-                if len(options) == 4 and question_text:
-                    questions.append({
-                        'text': question_text,
-                        'options': options,
-                        'correct': correct_answer or 'A'
-                    })
+                            current_question['explanation'] = line.split(':', 1)[1].strip()
             
-            except Exception as e:
-                logger.warning(f"Error parsing question block: {str(e)}")
-                continue
+            elif current_question:
+                # Continue parsing current question
+                if block.startswith(('A)', 'B)', 'C)', 'D)')):
+                    option_text = block[2:].strip()
+                    current_question['options'].append(option_text)
+                elif 'Correct:' in block or 'सही:' in block:
+                    correct_part = block.split(':')[1].strip().upper()
+                    current_question['correct'] = correct_part[0] if correct_part else 'A'
+                elif 'Explanation:' in block or 'व्याख्या:' in block:
+                    if ':' in block:
+                        current_question['explanation'] = block.split(':', 1)[1].strip()
+                elif len(current_question['options']) < 4 and not block.startswith(('Correct', 'Explanation')):
+                    # Might be continuation of option text
+                    if current_question['options']:
+                        current_question['options'][-1] += " " + block
+        
+        # Add the last question
+        if current_question and 'text' in current_question and len(current_question.get('options', [])) == 4:
+            questions.append(current_question)
+        
+        # Validate questions
+        valid_questions = []
+        for q in questions:
+            if (q.get('text') and 
+                len(q.get('options', [])) == 4 and 
+                q.get('correct') in ['A', 'B', 'C', 'D']):
+                valid_questions.append(q)
+        
+        if not valid_questions:
+            # Try alternative parsing method
+            valid_questions = self._alternative_parse(response)
         
         return {
             'topic': topic,
-            'questions': questions if questions else self._get_default_quiz(topic),
+            'questions': valid_questions,
             'created_at': datetime.now(TIMEZONE),
             'posted': False
         }
 
-    def _get_default_quiz(self, topic: str) -> list:
-        """Get default quiz questions if AI generation fails"""
+    def _alternative_parse(self, response: str) -> list:
+        """Alternative parsing method for AI response"""
+        questions = []
+        lines = response.split('\n')
         
-        default_quizzes = {
-            "ramayan": [
-                {
-                    "text": "राम के पिता का नाम क्या था? / Who was Rama's father?",
-                    "options": ["दशरथ / Dasharatha", "विश्वामित्र / Vishwamitra", "अग्नि / Agni", "इंद्र / Indra"],
-                    "correct": "A"
-                },
-                {
-                    "text": "सीता किस राज्य की राजकुमारी थीं? / Which kingdom's princess was Sita?",
-                    "options": ["मिथिला / Mithila", "अयोध्या / Ayodhya", "लंका / Lanka", "विदेह / Videha"],
-                    "correct": "A"
-                },
-                {
-                    "text": "राम का वनवास कितने वर्ष का था? / How many years was Rama's exile?",
-                    "options": ["5 वर्ष / years", "10 वर्ष / years", "14 वर्ष / years", "7 वर्ष / years"],
-                    "correct": "C"
-                },
-                {
-                    "text": "लंका के राजा का नाम क्या था? / What was the name of Lanka's king?",
-                    "options": ["कुंभकरण / Kumbhakarna", "रावण / Ravana", "मेघनाद / Meghnath", "विभीषण / Vibhishan"],
-                    "correct": "B"
-                },
-                {
-                    "text": "हनुमान किस देवता के अवतार माने जाते हैं? / Hanuman is considered an avatar of?",
-                    "options": ["वायु / Vayu", "शिव / Shiva", "विष्णु / Vishnu", "ब्रह्मा / Brahma"],
-                    "correct": "A"
-                }
-            ],
-            "mahabharata": [
-                {
-                    "text": "महाभारत का लेखक कौन था? / Who wrote the Mahabharata?",
-                    "options": ["वेदव्यास / Vedvyas", "कालिदास / Kalidasa", "तुलसीदास / Tulsidas", "भवभूति / Bhavabhuti"],
-                    "correct": "A"
-                },
-                {
-                    "text": "कुरुक्षेत्र युद्ध कितने दिन चला? / How many days did Kurukshetra war last?",
-                    "options": ["7 दिन / days", "14 दिन / days", "18 दिन / days", "21 दिन / days"],
-                    "correct": "C"
-                },
-                {
-                    "text": "पांडवों की संख्या कितनी थी? / How many Pandavas were there?",
-                    "options": ["3", "5", "7", "10"],
-                    "correct": "B"
-                },
-                {
-                    "text": "युधिष्ठिर के अन्य भाइयों के नाम बताइए। / Yudhishthira's brothers were:",
-                    "options": ["भीम और अर्जुन / Bhima and Arjun", "भीम, अर्जुन, नकुल, सहदेव / All of these", "नकुल और सहदेव / Nakul and Sahadev", "सिर्फ अर्जुन / Only Arjun"],
-                    "correct": "B"
-                },
-                {
-                    "text": "गीता किसने किसको सुनाई? / Who told Gita to whom?",
-                    "options": ["शिव ने पार्वती को / Shiva to Parvati", "कृष्ण ने अर्जुन को / Krishna to Arjun", "व्यास ने युधिष्ठिर को / Vyasa to Yudhisthira", "ब्रह्मा ने देवताओं को / Brahma to deities"],
-                    "correct": "B"
-                }
-            ]
-        }
+        current_q = None
+        option_count = 0
         
-        return default_quizzes.get(topic, default_quizzes["ramayan"])
+        for line in lines:
+            line = line.strip()
+            
+            # Detect new question
+            if line.lower().startswith(('q1', 'q2', 'q3', 'q4', 'q5', 'question')):
+                if current_q and len(current_q.get('options', [])) >= 4:
+                    questions.append(current_q)
+                
+                current_q = {
+                    'text': '',
+                    'options': [],
+                    'correct': 'A',
+                    'explanation': ''
+                }
+                option_count = 0
+                
+                # Extract question text
+                import re
+                q_match = re.match(r'Q\d+\)\s*(.+)', line) or re.match(r'Question\s*\d+[:.)]\s*(.+)', line)
+                if q_match:
+                    current_q['text'] = q_match.group(1)
+                else:
+                    current_q['text'] = line
+            
+            elif current_q:
+                # Check for options
+                option_match = re.match(r'([A-D])[).]\s*(.+)', line)
+                if option_match:
+                    option_letter = option_match.group(1)
+                    option_text = option_match.group(2)
+                    current_q['options'].append(option_text)
+                    option_count += 1
+                
+                # Check for correct answer
+                elif 'correct' in line.lower() or 'answer:' in line.lower():
+                    for letter in ['A', 'B', 'C', 'D']:
+                        if f' {letter})' in line.upper() or f': {letter}' in line.upper():
+                            current_q['correct'] = letter
+                            break
+                
+                # Check for explanation
+                elif 'explanation' in line.lower() or 'व्याख्या' in line.lower():
+                    if ':' in line:
+                        current_q['explanation'] = line.split(':', 1)[1].strip()
+        
+        # Add last question
+        if current_q and len(current_q.get('options', [])) >= 4:
+            questions.append(current_q)
+        
+        return questions[:5]  # Return max 5 questions
 
     def _format_quiz_preview(self, quiz_data: dict) -> str:
         """Format quiz for preview display"""
+        if not quiz_data or not quiz_data.get('questions'):
+            return "❌ No questions generated. Please try again."
+        
         preview = f"📚 **{quiz_data['topic'].title()} Quiz**\n\n"
-        preview += f"📊 Questions: {len(quiz_data['questions'])}\n"
+        preview += f"📊 Questions Generated: {len(quiz_data['questions'])}\n"
         preview += f"⏱️ Created: {quiz_data['created_at'].strftime('%Y-%m-%d %H:%M')}\n\n"
         
-        preview += "**Sample Questions:**\n"
-        for i, q in enumerate(quiz_data['questions'][:2], 1):
-            preview += f"\n{i}. {q['text']}\n"
-            for j, opt in enumerate(q['options'], 1):
-                preview += f"   {chr(64+j)}) {opt}\n"
-        
-        if len(quiz_data['questions']) > 2:
-            preview += f"\n... और {len(quiz_data['questions']) - 2} और प्रश्न"
+        preview += "**Sample Question:**\n"
+        if quiz_data['questions']:
+            q = quiz_data['questions'][0]
+            preview += f"\n{q['text']}\n"
+            for i, opt in enumerate(q['options'], 1):
+                preview += f"\n{chr(64+i)}) {opt}"
+            
+            if q.get('explanation'):
+                preview += f"\n\n💡 **Explanation Preview:**\n{q['explanation'][:150]}..."
         
         return preview
 
@@ -393,7 +505,7 @@ class QuizGenerator:
         query = update.callback_query
         await query.answer()
 
-        if not self.current_quiz:
+        if not self.current_quiz or not self.current_quiz.get('questions'):
             await query.edit_message_text("❌ No quiz data found. Please generate a quiz first.")
             return
 
@@ -408,8 +520,9 @@ class QuizGenerator:
             await query.edit_message_text(
                 "✅ **Quiz Posted Successfully!**\n\n"
                 f"📚 Topic: {self.current_quiz['topic'].title()}\n"
-                f"📊 Questions: {len(self.current_quiz['questions'])}\n"
-                f"✨ Posted to channel!"
+                f"🤖 AI-Generated Question\n"
+                f"📊 Posted as interactive poll\n"
+                f"✨ Channel updated!"
             )
 
             self.quiz_mode = False
@@ -417,6 +530,13 @@ class QuizGenerator:
         except Exception as e:
             logger.error(f"Error posting quiz: {str(e)}")
             await query.edit_message_text(f"❌ Error posting quiz: {str(e)}")
+
+    async def quiz_regenerate_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE, topic: str):
+        """Regenerate quiz for the same topic"""
+        query = update.callback_query
+        await query.answer()
+
+        await self._start_quiz_generation(query, context, topic)
 
     async def quiz_schedule_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Schedule quiz posting"""
@@ -431,6 +551,7 @@ class QuizGenerator:
             [InlineKeyboardButton("⏰ 30 minutes", callback_data="quiz_delay_30")],
             [InlineKeyboardButton("⏰ 1 hour", callback_data="quiz_delay_60")],
             [InlineKeyboardButton("⏰ 2 hours", callback_data="quiz_delay_120")],
+            [InlineKeyboardButton("⏰ 6 hours", callback_data="quiz_delay_360")],
             [InlineKeyboardButton("❌ Cancel", callback_data="quiz_cancel")]
         ]
 
@@ -450,28 +571,32 @@ class QuizGenerator:
         try:
             await query.edit_message_text(
                 f"⏰ Quiz scheduled to post in {delay_minutes} minutes...\n"
-                f"✨ Please wait!"
+                f"✨ Will be posted automatically!"
             )
 
             # Schedule posting
             await asyncio.sleep(delay_minutes * 60)
-            await self._post_quiz_to_channel(self.current_quiz)
-
-            await query.edit_message_text(
-                "✅ **Scheduled Quiz Posted!**\n\n"
-                f"📚 Topic: {self.current_quiz['topic'].title()}\n"
-                f"📊 Questions: {len(self.current_quiz['questions'])}\n"
-                f"✨ Posted to channel!"
-            )
+            
+            if self.current_quiz:
+                await self._post_quiz_to_channel(self.current_quiz)
+                
+                await query.edit_message_text(
+                    "✅ **Scheduled Quiz Posted!**\n\n"
+                    f"📚 Topic: {self.current_quiz['topic'].title()}\n"
+                    f"🤖 AI-Generated Question\n"
+                    f"📊 Posted as interactive poll\n"
+                    f"⏰ Posted after {delay_minutes} minutes"
+                )
 
             self.quiz_mode = False
 
         except Exception as e:
             logger.error(f"Error in scheduled quiz posting: {str(e)}")
+            await query.edit_message_text(f"❌ Error in scheduled posting: {str(e)}")
 
     async def _post_quiz_to_channel(self, quiz_data: dict):
         """
-        Post quiz to Telegram channel as poll
+        Post quiz to Telegram channel as poll (Only 1 question, poll format only)
         
         Args:
             quiz_data: Dictionary containing quiz questions
@@ -481,45 +606,66 @@ class QuizGenerator:
                 logger.error("Userbot not connected")
                 return
 
-            # Get first question for poll
-            first_question = quiz_data['questions'][0]
-            
-            # Create poll message
-            poll_message = (
-                f"🎯 **{quiz_data['topic'].title()} Quiz**\n\n"
-                f"{first_question['text']}\n\n"
-                f"📊 Total Questions: {len(quiz_data['questions'])}"
-            )
+            if not quiz_data.get('questions'):
+                logger.error("No questions in quiz data")
+                return
 
-            # Send poll to channel
+            # Get ONLY ONE random question from the quiz
+            question = random.choice(quiz_data['questions'])
+            
+            # Create poll message with topic context
+            poll_question = f"🎯 {quiz_data['topic'].title()} Quiz\n\n{question['text']}"
+            
+            # Get options for poll (ensure exactly 4)
+            poll_options = question['options']
+            if len(poll_options) != 4:
+                logger.warning(f"Question has {len(poll_options)} options, expected 4")
+                # Pad or truncate to 4 options
+                if len(poll_options) < 4:
+                    poll_options = poll_options + [f"Option {i+1}" for i in range(len(poll_options), 4)]
+                else:
+                    poll_options = poll_options[:4]
+            
+            # Determine correct option index (0-3)
+            correct_index = ord(question.get('correct', 'A')) - ord('A')
+            if correct_index < 0 or correct_index > 3:
+                correct_index = 0
+            
+            # Send poll to channel using telethon
             channel = await self.bot.userbot.get_entity(YOUR_CHANNEL_ID)
             
-            # Send as message with options
-            await self.bot.userbot.send_message(
-                channel,
-                poll_message
+            # Create poll with correct answer
+            poll = await self.bot.userbot.send_message(
+                entity=channel,
+                message=poll_question,
+                silent=None,
+                background=None,
+                clear_draft=None,
+                reply_to=None,
+                schedule=None,
+                buttons=None,
+                link_preview=True,
+                file=None,
+                formatting_entities=None,
+                supports_streaming=True,
+                noforwards=False,
+                comment_to=None,
+                send_as=None,
+                poll=dict(
+                    question=poll_question[:255],  # Telegram limit
+                    answers=[
+                        dict(text=opt[:100], option=b'1') for opt in poll_options
+                    ],
+                    closed=False,
+                    multiple_choice=False,
+                    public_voters=True,
+                    quiz=True,
+                    close_date=None,
+                    correct_answers=[correct_index] if 0 <= correct_index < 4 else None
+                )
             )
 
-            # Send each question as separate message
-            for i, question in enumerate(quiz_data['questions'], 1):
-                question_text = (
-                    f"**प्रश्न {i}/{len(quiz_data['questions'])}**\n\n"
-                    f"{question['text']}\n\n"
-                    f"A) {question['options'][0]}\n"
-                    f"B) {question['options'][1]}\n"
-                    f"C) {question['options'][2]}\n"
-                    f"D) {question['options'][3]}\n\n"
-                    f"💡 सही उत्तर: {question['correct']}"
-                )
-                
-                await self.bot.userbot.send_message(
-                    channel,
-                    question_text
-                )
-                
-                await asyncio.sleep(1)  # Delay between posts
-
-            logger.info(f"Quiz posted to channel: {quiz_data['topic']}")
+            logger.info(f"Single AI-generated quiz question posted as poll to channel: {quiz_data['topic']}")
             quiz_data['posted'] = True
 
         except Exception as e:
